@@ -113,6 +113,10 @@ class AppState:
 
         self.window_state = None
         self.ingestion_pipeline = None
+        self.topology_cache: Optional[Dict[str, Any]] = None
+        self.topology_cache_at: float = 0.0
+        self.infrastructure_cache: Optional[Dict[str, Any]] = None
+        self.infrastructure_cache_at: float = 0.0
 
 
 state = AppState()
@@ -2043,8 +2047,7 @@ async def alerts():
     return {"alerts": active_alerts, "count": len(active_alerts), "timestamp": utc_now_iso()}
 
 
-@app.get("/topology")
-async def topology():
+async def _build_topology_payload():
     from anomaly_api.features import extract_features
 
     raw_scores = state.current_scores or compute_all_scores()
@@ -2196,8 +2199,22 @@ async def topology():
     }
 
 
+@app.get("/topology")
+async def topology():
+    now = time.time()
+    if state.topology_cache is not None and (now - state.topology_cache_at) < 1.25:
+        return state.topology_cache
+    payload = await _build_topology_payload()
+    state.topology_cache = payload
+    state.topology_cache_at = time.time()
+    return payload
+
+
 @app.get("/infrastructure")
 async def infrastructure():
+    now = time.time()
+    if state.infrastructure_cache is not None and (now - state.infrastructure_cache_at) < 1.25:
+        return state.infrastructure_cache
     topology_payload = await topology()
     history_payload = list(state.history)
     payload = build_infrastructure_payload(
@@ -2207,6 +2224,8 @@ async def infrastructure():
         remediation_engine=state.remediation_engine,
     )
     payload["timestamp"] = utc_now_iso()
+    state.infrastructure_cache = payload
+    state.infrastructure_cache_at = time.time()
     return payload
 
 
