@@ -78,6 +78,7 @@ dashboard/frontend/dist/
 # Environment
 .env
 .env.local
+.env.public
 
 # macOS
 .DS_Store
