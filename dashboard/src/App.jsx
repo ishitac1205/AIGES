@@ -66,6 +66,27 @@ function getPageFromLocation() {
   return 'solar'
 }
 
+function describeDemoStage(stage) {
+  switch (stage) {
+    case 'priming':
+      return 'Warming telemetry'
+    case 'pressure_building':
+      return 'Building pre-warning'
+    case 'attacking':
+      return 'Injecting failure'
+    case 'observing_failure':
+      return 'Watching outage'
+    case 'remediating':
+      return 'Autonomous repair'
+    case 'evaluating':
+      return 'Verifying recovery'
+    case 'completed':
+      return 'Report ready'
+    default:
+      return 'Attack + autonomous fix'
+  }
+}
+
 function DashboardApp({ auth, onLogout }) {
   const { theme, dark, setDark } = useTheme()
   const { data, connected, error, fetchWindow, triggerRemediation, triggerDemo, refreshTopology } = useTopology()
@@ -227,7 +248,7 @@ function DashboardApp({ auth, onLogout }) {
                 textTransform: 'uppercase',
               }}>
                 {demoRunning
-                  ? latestDemo?.service || 'Autonomous recovery'
+                  ? `${latestDemo?.service || 'recommendationservice'} · ${describeDemoStage(latestDemo?.stage)}`
                   : publicDemoCoolingDown && !canOperate
                     ? `Cooldown ${Math.ceil(publicDemo?.cooldown_remaining_s || 0)}s`
                   : canOperate

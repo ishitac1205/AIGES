@@ -30,6 +30,27 @@ function formatDemoStage(stage) {
   return (stage || 'pending').replace(/_/g, ' ')
 }
 
+function describeDemoStage(stage) {
+  switch (stage) {
+    case 'priming':
+      return 'Telemetry and model windows are warming before the demo asks for a warning.'
+    case 'pressure_building':
+      return 'Bounded runtime pressure is being applied so the models can surface a pre-failure signal.'
+    case 'attacking':
+      return 'The forced outage step is now being injected into the target workload.'
+    case 'observing_failure':
+      return 'AEGIS is waiting for the outage to register across runtime health and topology state.'
+    case 'remediating':
+      return 'The remediation engine is actively repairing the disrupted workload.'
+    case 'evaluating':
+      return 'Recovery is being verified against live workload state and evaluator checks.'
+    case 'completed':
+      return 'The demo has closed and the final timeline, summary, and report are ready.'
+    default:
+      return 'The backend will warm the models, request a warning, inject the outage, and restore the service.'
+  }
+}
+
 function downloadBlob(filename, content, type) {
   const blob = new Blob([content], { type })
   const url = URL.createObjectURL(blob)
@@ -287,6 +308,9 @@ export default function LogsPage({ events, logs, timestamp, topology, connected 
                   </div>
                   <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 10, lineHeight: 1.7, overflowWrap: 'anywhere' }}>
                     Status {demoRun.status} · Stage {formatDemoStage(demoRun.stage)} · Platform {demoRun.platform}
+                  </div>
+                  <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 10, lineHeight: 1.7, overflowWrap: 'anywhere' }}>
+                    Narrative {describeDemoStage(demoRun.stage)}
                   </div>
                   <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 10, lineHeight: 1.7, overflowWrap: 'anywhere' }}>
                     Attack {demoRun.attack_action?.replace(/_/g, ' ')} · Fix {demoRun.fix_action ? demoRun.fix_action.replace(/_/g, ' ') : 'awaiting remediation decision'}

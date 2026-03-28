@@ -98,6 +98,27 @@ function formatDemoStage(stage) {
   return (stage || 'pending').replace(/_/g, ' ')
 }
 
+function describeDemoStage(stage) {
+  switch (stage) {
+    case 'priming':
+      return 'AEGIS is filling the live telemetry window before it asks the models for a warning.'
+    case 'pressure_building':
+      return 'The backend is applying bounded pressure so the IF and LSTM can surface a pre-failure warning.'
+    case 'attacking':
+      return 'The forced outage step is now being injected into the target service.'
+    case 'observing_failure':
+      return 'The outage is live and AEGIS is waiting for runtime and topology degradation to register.'
+    case 'remediating':
+      return 'The remediation engine is executing the recovery action and tracking the result.'
+    case 'evaluating':
+      return 'Recovery is running through the evaluator to confirm healthy service state.'
+    case 'completed':
+      return 'The attack, recovery, timeline, and report have been recorded.'
+    default:
+      return 'The demo will warm the models, request a pre-warning, inject the outage, and then repair it automatically.'
+  }
+}
+
 function PanelCard({ title, subtitle, children, styles }) {
   return (
     <div style={styles.card}>
@@ -219,7 +240,7 @@ export default function InfoPanel({ topology, children }) {
 
       <PanelCard
         title="Pre-Failure Predictor"
-        subtitle="LSTM-led early warning and preventive action planning."
+        subtitle="LSTM-led warning before the forced outage step, with preventive actions prepared by the backend."
         styles={styles}
       >
         {topPredictiveAlert ? (
@@ -249,7 +270,7 @@ export default function InfoPanel({ topology, children }) {
 
       <PanelCard
         title="Autonomous Demo"
-        subtitle="Intentional attack, self-heal, and stored operator report."
+        subtitle="Model warm-up, pre-warning, forced outage, autonomous repair, and stored report."
         styles={styles}
       >
         {demoRun ? (
@@ -259,6 +280,9 @@ export default function InfoPanel({ topology, children }) {
             </div>
             <div style={styles.meta}>
               Status {demoRun.status} · Stage {formatDemoStage(demoRun.stage)}
+            </div>
+            <div style={styles.meta}>
+              {describeDemoStage(demoRun.stage)}
             </div>
             <div style={styles.meta}>
               Attack {demoRun.attack_action?.replace(/_/g, ' ')} · Fix {demoRun.fix_action ? demoRun.fix_action.replace(/_/g, ' ') : 'awaiting recovery decision'}
