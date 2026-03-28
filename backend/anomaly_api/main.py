@@ -959,6 +959,126 @@ def _recent_incident_map(limit: int = 25) -> Dict[str, Dict]:
     return latest
 
 
+def _active_incident_map() -> Dict[str, Dict]:
+    if state.remediation_engine is None:
+        return {}
+    return {
+        incident["root_cause_service"]: incident
+        for incident in state.remediation_engine.list_active_incidents()
+        if incident.get("root_cause_service")
+    }
+
+
+def _safe_workload_snapshot(service: str) -> Optional[Dict[str, Any]]:
+    if state.remediation_engine is None:
+        return None
+    try:
+        return state.remediation_engine.orchestrator.inspect_service(service).to_dict()
+    except Exception:
+        return None
+
+
+def _topology_runtime_overlay(
+    service: str,
+    snapshot: Dict[str, Any],
+    active_incident: Optional[Dict[str, Any]],
+    demo_run: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    overlay = dict(snapshot)
+    overlay["feature_flags"] = list(snapshot.get("feature_flags", []) or [])
+    alerts: List[Dict[str, Any]] = []
+    workload = _safe_workload_snapshot(service)
+    demo_active = (
+        demo_run
+        and demo_run.get("service") == service
+        and demo_run.get("status") == "running"
+    )
+
+    if active_incident:
+        failure_type = active_incident.get("failure_type", "service_unhealthy")
+        overlay["combined_score"] = round(max(float(overlay.get("combined_score", 0.0) or 0.0), 0.88), 3)
+        overlay["status"] = "critical"
+        overlay["failure_type"] = failure_type
+        overlay["feature_flags"] = list(dict.fromkeys(overlay["feature_flags"] + [failure_type]))
+        alerts.append(
+            {
+                "service": service,
+                "severity": "critical",
+                "status": "active_incident",
+                "title": f"Active incident on {service}",
+                "message": (
+                    f"AEGIS is actively remediating {service} for "
+                    f"{failure_type.replace('_', ' ')}."
+                ),
+                "combined_score": overlay["combined_score"],
+                "source": "runtime_incident",
+            }
+        )
+
+    if workload:
+        reasons: List[str] = []
+        if not workload.get("exists", True):
+            reasons.append("workload_missing")
+        else:
+            if not workload.get("running", False):
+                reasons.append("workload_not_running")
+            if not workload.get("healthy", False):
+                reasons.append("workload_unhealthy")
+            if workload.get("oom_killed"):
+                reasons.append("oom_killed")
+            if int(workload.get("restart_count", 0) or 0) >= RUNTIME_RESTART_LOOP_THRESHOLD:
+                reasons.append("restart_loop_detected")
+        if reasons:
+            critical = any(reason in {"workload_missing", "workload_not_running", "oom_killed", "restart_loop_detected"} for reason in reasons)
+            floor = 0.94 if critical else 0.76
+            overlay["combined_score"] = round(max(float(overlay.get("combined_score", 0.0) or 0.0), floor), 3)
+            overlay["status"] = "critical" if critical else "warning"
+            overlay["feature_flags"] = list(dict.fromkeys(overlay["feature_flags"] + reasons))
+            overlay["failure_type"] = overlay.get("failure_type") or ("service_unhealthy" if critical else "generic_anomaly")
+            alerts.append(
+                {
+                    "service": service,
+                    "severity": "critical" if critical else "warning",
+                    "status": "runtime_degraded",
+                    "title": f"Runtime degradation on {service}",
+                    "message": (
+                        f"{service} is degraded in the live runtime: "
+                        f"{', '.join(reason.replace('_', ' ') for reason in reasons)}."
+                    ),
+                    "combined_score": overlay["combined_score"],
+                    "source": "runtime_health",
+                }
+            )
+
+    if demo_active:
+        stage = demo_run.get("stage", "running")
+        stage_messages = {
+            "attacking": "AEGIS is injecting the failure into the selected service.",
+            "observing_failure": "AEGIS is observing the failure as live telemetry catches up.",
+            "remediating": "AEGIS is applying the autonomous fix now.",
+            "evaluating": "AEGIS is verifying that the service has recovered cleanly.",
+        }
+        if stage in stage_messages:
+            recovering = stage in {"remediating", "evaluating"}
+            floor = 0.82 if recovering else 0.96
+            overlay["combined_score"] = round(max(float(overlay.get("combined_score", 0.0) or 0.0), floor), 3)
+            overlay["status"] = "warning" if recovering else "critical"
+            overlay["feature_flags"] = list(dict.fromkeys(overlay["feature_flags"] + ["demo_attack_active"]))
+            alerts.append(
+                {
+                    "service": service,
+                    "severity": "warning" if recovering else "critical",
+                    "status": "demo_active",
+                    "title": f"Autonomous demo impacting {service}",
+                    "message": stage_messages[stage],
+                    "combined_score": overlay["combined_score"],
+                    "source": "demo",
+                }
+            )
+
+    return overlay, alerts
+
+
 def _build_evidence(service: str, failure_type: str, scores: Optional[Dict[str, Dict]] = None) -> Dict[str, Any]:
     from anomaly_api.features import extract_features
 
@@ -1927,9 +2047,32 @@ async def alerts():
 async def topology():
     from anomaly_api.features import extract_features
 
-    scores = state.current_scores or compute_all_scores()
-    avg_score = sum(v["combined_score"] for v in scores.values()) / max(len(scores), 1)
-    health_score = round(100 - avg_score * 100)
+    raw_scores = state.current_scores or compute_all_scores()
+    active_incident_map = _active_incident_map()
+    demo_run = latest_demo_run()
+    scores: Dict[str, Dict[str, Any]] = {}
+    topology_alerts: List[Dict[str, Any]] = []
+
+    for svc in ALL_SERVICES:
+        overlaid, service_alerts = _topology_runtime_overlay(
+            svc,
+            raw_scores.get(svc, {}),
+            active_incident_map.get(svc),
+            demo_run,
+        )
+        scores[svc] = overlaid
+        topology_alerts.extend(service_alerts)
+
+    avg_score = sum(float(v.get("combined_score", 0.0) or 0.0) for v in scores.values()) / max(len(scores), 1)
+    degraded_service_count = sum(
+        1
+        for payload in scores.values()
+        if (payload.get("status") in {"critical", "warning"})
+        or float(payload.get("combined_score", 0.0) or 0.0) >= 0.75
+    )
+    active_demo_penalty = 10 if demo_run and demo_run.get("status") == "running" else 0
+    health_penalty = degraded_service_count * 6 + active_demo_penalty
+    health_score = max(0, round(100 - avg_score * 100 - health_penalty))
 
     momentum = 0.0
     if len(state.history) >= 2:
@@ -2003,7 +2146,35 @@ async def topology():
         }
 
     root_cause = get_root_cause_analysis(scores)
+    if not root_cause.get("service") and demo_run and demo_run.get("status") == "running":
+        root_cause = {
+            "service": demo_run.get("service"),
+            "confidence": 0.99,
+            "failure_type": "service_unhealthy",
+            "affected_services": [demo_run.get("service")],
+            "propagation_path": [demo_run.get("service")],
+        }
     recommendation = get_recommendation(root_cause, scores)
+    if demo_run and demo_run.get("status") == "running":
+        recommendation = (
+            f"Autonomous demo is active on {demo_run.get('service')}. "
+            f"AEGIS should detect the disruption, raise an alert, and restore the service without user intervention."
+        )
+
+    score_alerts = [
+        {"service": svc, **v}
+        for svc, v in scores.items()
+        if float(v.get("combined_score", 0.0) or 0.0) > 0.7
+    ]
+    score_alerts.sort(key=lambda item: float(item.get("combined_score", 0.0) or 0.0), reverse=True)
+    merged_alerts: List[Dict[str, Any]] = []
+    seen = set()
+    for item in topology_alerts + score_alerts:
+        key = (item.get("service"), item.get("title") or item.get("status") or item.get("source"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_alerts.append(item)
 
     return {
         "timestamp": utc_now_iso(),
@@ -2014,10 +2185,10 @@ async def topology():
         "services": service_data,
         "dependency_graph": DEPENDENCY_GRAPH,
         "root_cause": root_cause,
-        "alerts": [{"service": svc, **v} for svc, v in scores.items() if v.get("combined_score", 0) > 0.7],
+        "alerts": merged_alerts,
         "predictive_alerts": list(state.predictive_alerts.values()),
         "timeline": _timeline_snapshot(limit=12),
-        "demo_run": latest_demo_run(),
+        "demo_run": demo_run,
         "system_summary": state.system_store.summarize() if state.system_store else {},
         "recommendation": recommendation,
         "active_incidents": state.remediation_engine.list_active_incidents() if state.remediation_engine else [],

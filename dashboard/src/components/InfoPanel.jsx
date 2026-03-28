@@ -136,8 +136,10 @@ export default function InfoPanel({ topology, children }) {
   const recommendation = topology?.recommendation || 'Monitoring the live platform state.'
   const activeIncidents = topology?.active_incidents || []
   const recentIncidents = topology?.recent_incidents || []
+  const alerts = Array.isArray(topology?.alerts) ? topology.alerts : []
   const predictiveAlerts = Array.isArray(topology?.predictive_alerts) ? topology.predictive_alerts : []
   const topPredictiveAlert = predictiveAlerts.length ? [...predictiveAlerts].sort((a, b) => (b.lstm_score || 0) - (a.lstm_score || 0))[0] : null
+  const topAlert = alerts.length ? [...alerts].sort((a, b) => (b.combined_score || b.score || 0) - (a.combined_score || a.score || 0))[0] : null
   const timeline = topology?.timeline || []
   const demoRun = topology?.demo_run || null
 
@@ -192,6 +194,27 @@ export default function InfoPanel({ topology, children }) {
         styles={styles}
       >
         <div style={styles.meta}>{recommendation}</div>
+      </PanelCard>
+
+      <PanelCard
+        title="Active Alert"
+        subtitle="Highest-priority live alert currently visible to the operator."
+        styles={styles}
+      >
+        {topAlert ? (
+          <>
+            <div style={{ ...styles.strongText, color: topAlert.severity === 'critical' ? '#cc2222' : '#c45c0a' }}>
+              {topAlert.service}
+            </div>
+            <div style={styles.meta}>{topAlert.title || 'Live alert'}</div>
+            <div style={styles.meta}>{topAlert.message || 'A service is currently degraded.'}</div>
+            <div style={{ ...styles.badge, color: topAlert.severity === 'critical' ? '#cc2222' : '#c45c0a' }}>
+              {(topAlert.severity || topAlert.status || 'warning').replace(/_/g, ' ')}
+            </div>
+          </>
+        ) : (
+          <div style={{ ...styles.meta, color: '#2a8a2a' }}>No active operator alert is open.</div>
+        )}
       </PanelCard>
 
       <PanelCard
