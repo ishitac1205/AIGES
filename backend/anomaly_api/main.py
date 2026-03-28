@@ -110,6 +110,7 @@ class AppState:
         self.runtime_health: Dict[str, Dict[str, Any]] = {}
         self.system_store: Optional[SQLiteSystemStore] = None
         self.demo_task: Optional[asyncio.Task] = None
+        self.public_demo_requests: Dict[str, deque] = {}
 
         self.window_state = None
         self.ingestion_pipeline = None
@@ -168,6 +169,106 @@ def latest_demo_run() -> Optional[Dict[str, Any]]:
     except Exception as exc:
         logger.debug("Failed to fetch latest demo run: %s", exc)
         return None
+
+
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _public_demo_client_id(request: Request) -> str:
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded_for:
+        return forwarded_for
+    if request.client and request.client.host:
+        return request.client.host
+    return "anonymous"
+
+
+def _public_demo_cooldown_remaining(now: Optional[float] = None) -> float:
+    latest = latest_demo_run()
+    if latest is None or SETTINGS.public_demo_cooldown_s <= 0:
+        return 0.0
+    anchor = _parse_iso_timestamp(latest.get("updated_at") or latest.get("created_at"))
+    if anchor is None:
+        return 0.0
+    now_ts = now if now is not None else time.time()
+    remaining = SETTINGS.public_demo_cooldown_s - (now_ts - anchor.timestamp())
+    return max(0.0, remaining)
+
+
+def _public_demo_rate_limit_snapshot(request: Optional[Request] = None, now: Optional[float] = None) -> Dict[str, Any]:
+    now_ts = now if now is not None else time.time()
+    client_id = _public_demo_client_id(request) if request is not None else None
+    remaining = SETTINGS.public_demo_rate_limit
+    recent_count = 0
+
+    if client_id is not None:
+        bucket = state.public_demo_requests.setdefault(client_id, deque())
+        cutoff = now_ts - SETTINGS.public_demo_window_s
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        recent_count = len(bucket)
+        remaining = max(0, SETTINGS.public_demo_rate_limit - recent_count)
+
+    return {
+        "client_id": client_id,
+        "limit": SETTINGS.public_demo_rate_limit,
+        "window_s": SETTINGS.public_demo_window_s,
+        "recent_count": recent_count,
+        "remaining": remaining,
+    }
+
+
+def _public_demo_status(request: Optional[Request] = None) -> Dict[str, Any]:
+    latest = latest_demo_run()
+    running = bool(
+        (state.demo_task is not None and not state.demo_task.done())
+        or (latest and latest.get("status") == "running")
+    )
+    cooldown_remaining_s = round(_public_demo_cooldown_remaining(), 1)
+    rate_limit = _public_demo_rate_limit_snapshot(request)
+    return {
+        "enabled": SETTINGS.public_demo_enabled,
+        "allowed_services": SETTINGS.public_demo_services,
+        "active": running,
+        "cooldown_remaining_s": cooldown_remaining_s,
+        "rate_limit": rate_limit,
+        "latest_run_id": latest.get("id") if latest else None,
+        "latest_status": latest.get("status") if latest else None,
+    }
+
+
+def _record_public_demo_request(request: Request) -> None:
+    client_id = _public_demo_client_id(request)
+    bucket = state.public_demo_requests.setdefault(client_id, deque())
+    bucket.append(time.time())
+
+
+def _start_demo_run(service: str, owner: str) -> Dict[str, Any]:
+    if state.remediation_engine is None or state.system_store is None:
+        raise HTTPException(503, "Demo control plane is not available")
+    if service not in ALL_SERVICES:
+        raise HTTPException(404, f"Unknown service: {service}")
+
+    latest = latest_demo_run()
+    if state.demo_task is not None and not state.demo_task.done():
+        raise HTTPException(409, "A demo run is already active")
+    if latest and latest.get("status") == "running":
+        raise HTTPException(409, "The latest demo run is still in progress")
+
+    run = state.system_store.start_demo_run(
+        service=service,
+        platform=state.remediation_engine.orchestrator.platform,
+        started_by=owner,
+        attack_action="stop_service",
+    )
+    state.demo_task = asyncio.create_task(run_autonomous_demo(run["id"], service, owner))
+    return run
 
 
 def login_required() -> bool:
@@ -1676,6 +1777,9 @@ async def auth_config():
         "login_required": login_required(),
         "google_client_id": SETTINGS.google_client_id if login_required() else "",
         "operator_emails_configured": bool(SETTINGS.operator_emails),
+        "operator_token_required": SETTINGS.auth_enabled,
+        "public_demo": _public_demo_status(),
+        "public_site_origin": SETTINGS.public_site_origin,
         "timestamp": utc_now_iso(),
     }
 
@@ -1816,6 +1920,7 @@ async def status():
         "predictive_alerts": list(state.predictive_alerts.values()),
         "timeline": _timeline_snapshot(limit=8),
         "demo_run": latest_demo_run(),
+        "public_demo": _public_demo_status(),
         "recommendation": recommendation,
         "active_incidents": state.remediation_engine.list_active_incidents() if state.remediation_engine else [],
         "recent_incidents": state.remediation_engine.list_incident_history(limit=10) if state.remediation_engine else [],
@@ -1934,30 +2039,38 @@ async def remediate(payload: RemediatePayload):
 
 @app.post("/demo/run", dependencies=[Depends(require_operator_access)])
 async def demo_run(payload: DemoRunPayload):
-    if state.remediation_engine is None or state.system_store is None:
-        raise HTTPException(503, "Demo control plane is not available")
-    if payload.service not in ALL_SERVICES:
-        raise HTTPException(404, f"Unknown service: {payload.service}")
+    run = _start_demo_run(payload.service, payload.owner)
+    return {"demo_run": run, "public_demo": _public_demo_status(), "timestamp": utc_now_iso()}
 
-    latest = latest_demo_run()
-    if state.demo_task is not None and not state.demo_task.done():
-        raise HTTPException(409, "A demo run is already active")
-    if latest and latest.get("status") == "running":
-        raise HTTPException(409, "The latest demo run is still in progress")
 
-    run = state.system_store.start_demo_run(
-        service=payload.service,
-        platform=state.remediation_engine.orchestrator.platform,
-        started_by=payload.owner,
-        attack_action="stop_service",
-    )
-    state.demo_task = asyncio.create_task(run_autonomous_demo(run["id"], payload.service, payload.owner))
-    return {"demo_run": run, "timestamp": utc_now_iso()}
+@app.post("/demo/public-run")
+async def public_demo_run(payload: DemoRunPayload, request: Request):
+    policy = _public_demo_status(request)
+    if not SETTINGS.public_demo_enabled:
+        raise HTTPException(403, "Public demo is not enabled on this deployment")
+    if payload.service not in SETTINGS.public_demo_services:
+        raise HTTPException(403, f"Public demo is not allowed for {payload.service}")
+    if policy["active"]:
+        raise HTTPException(409, "A public demo is already running")
+    if policy["cooldown_remaining_s"] > 0:
+        raise HTTPException(429, f"Public demo cooldown is active for another {int(policy['cooldown_remaining_s'])} seconds")
+    if policy["rate_limit"]["remaining"] <= 0:
+        raise HTTPException(429, "Public demo rate limit exceeded for this viewer")
+
+    _record_public_demo_request(request)
+    owner = f"public:{policy['rate_limit']['client_id'] or 'viewer'}"
+    run = _start_demo_run(payload.service, owner)
+    return {"demo_run": run, "public_demo": _public_demo_status(request), "timestamp": utc_now_iso()}
 
 
 @app.get("/demo/latest")
-async def demo_latest():
-    return {"demo_run": latest_demo_run(), "timestamp": utc_now_iso()}
+async def demo_latest(request: Request):
+    return {"demo_run": latest_demo_run(), "public_demo": _public_demo_status(request), "timestamp": utc_now_iso()}
+
+
+@app.get("/demo/policy")
+async def demo_policy(request: Request):
+    return {"public_demo": _public_demo_status(request), "timestamp": utc_now_iso()}
 
 
 @app.get("/demo/report/{run_id}")
@@ -2192,6 +2305,7 @@ async def _build_topology_payload():
         "predictive_alerts": list(state.predictive_alerts.values()),
         "timeline": _timeline_snapshot(limit=12),
         "demo_run": demo_run,
+        "public_demo": _public_demo_status(),
         "system_summary": state.system_store.summarize() if state.system_store else {},
         "recommendation": recommendation,
         "active_incidents": state.remediation_engine.list_active_incidents() if state.remediation_engine else [],

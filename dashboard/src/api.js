@@ -18,8 +18,13 @@ export function getOperatorHeaders(env = import.meta.env) {
   return token ? { 'X-Aegis-Token': token } : {}
 }
 
+export function hasOperatorToken(env = import.meta.env) {
+  return Boolean(getApiToken(env))
+}
+
 export const API_BASE = getApiBase()
 export const OPERATOR_HEADERS = getOperatorHeaders()
+export const HAS_OPERATOR_TOKEN = hasOperatorToken()
 
 export function apiUrl(path) {
   const normalized = path.startsWith('/') ? path : `/${path}`

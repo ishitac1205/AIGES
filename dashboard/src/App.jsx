@@ -5,6 +5,7 @@ import { useInfrastructure } from './hooks/useInfrastructure'
 import { useModelInsights } from './hooks/useModelInsights'
 import { useSystemLogs } from './hooks/useSystemLogs'
 import { useAuth } from './hooks/useAuth'
+import { HAS_OPERATOR_TOKEN } from './api'
 import { ThemeProvider, useTheme } from './ThemeContext'
 import SolarSystem from './components/SolarSystem'
 import InfoPanel from './components/InfoPanel'
@@ -124,7 +125,10 @@ function DashboardApp({ auth, onLogout }) {
   const selectedData = data?.services?.[selectedService]
   const latestDemo = data?.demo_run || null
   const demoRunning = latestDemo?.status === 'running'
-  const canOperate = !auth?.config?.login_required || Boolean(auth?.user?.operator)
+  const publicDemo = data?.public_demo || auth?.config?.public_demo || null
+  const publicDemoCoolingDown = Number(publicDemo?.cooldown_remaining_s || 0) > 0
+  const canOperate = Boolean(auth?.user?.operator) || HAS_OPERATOR_TOKEN || !auth?.config?.operator_token_required
+  const canTriggerDemo = canOperate || (Boolean(publicDemo?.enabled) && !publicDemoCoolingDown)
   const DOT_GRID = `radial-gradient(circle, ${theme.bgDot} 1px, transparent 1px)`
 
   const handleDemoRun = useCallback(async () => {
@@ -193,7 +197,7 @@ function DashboardApp({ auth, onLogout }) {
             <button {...navBtn('logs', 'SYSTEM LOGS', 'Timeline and persistence')} />
             <button
               onClick={handleDemoRun}
-              disabled={demoBusy || demoRunning || !canOperate}
+              disabled={demoBusy || demoRunning || !canTriggerDemo}
               style={{
                 fontFamily: theme.displayFont || theme.font,
                 fontSize: 12,
@@ -204,13 +208,13 @@ function DashboardApp({ auth, onLogout }) {
                 border: `1px solid ${demoRunning ? theme.accent : theme.borderLight}`,
                 background: demoRunning ? theme.accent : 'transparent',
                 color: demoRunning ? theme.bg : theme.text,
-                cursor: demoBusy || demoRunning || !canOperate ? 'not-allowed' : 'pointer',
+                cursor: demoBusy || demoRunning || !canTriggerDemo ? 'not-allowed' : 'pointer',
                 transition: 'all 0.2s',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'flex-start',
                 minWidth: 132,
-                opacity: demoBusy || demoRunning || !canOperate ? 0.8 : 1,
+                opacity: demoBusy || demoRunning || !canTriggerDemo ? 0.8 : 1,
               }}
             >
               <span>{demoRunning ? 'DEMO RUNNING' : demoBusy ? 'STARTING DEMO' : 'RUN DEMO'}</span>
@@ -222,7 +226,15 @@ function DashboardApp({ auth, onLogout }) {
                 marginTop: 2,
                 textTransform: 'uppercase',
               }}>
-                {demoRunning ? latestDemo?.service || 'Autonomous recovery' : canOperate ? 'Attack + autonomous fix' : 'Operator access required'}
+                {demoRunning
+                  ? latestDemo?.service || 'Autonomous recovery'
+                  : publicDemoCoolingDown && !canOperate
+                    ? `Cooldown ${Math.ceil(publicDemo?.cooldown_remaining_s || 0)}s`
+                  : canOperate
+                    ? 'Attack + autonomous fix'
+                    : publicDemo?.enabled
+                      ? 'Public bounded demo'
+                      : 'Demo unavailable'}
               </span>
             </button>
           </div>

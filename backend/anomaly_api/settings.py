@@ -72,6 +72,12 @@ class Settings:
     predictive_alert_threshold: float
     predictive_auto_action_threshold: float
     predictive_action_cooldown_s: float
+    public_demo_enabled: bool
+    public_demo_services: List[str]
+    public_demo_cooldown_s: float
+    public_demo_rate_limit: int
+    public_demo_window_s: float
+    public_site_origin: str
 
     @property
     def is_production(self) -> bool:
@@ -87,6 +93,7 @@ def load_settings() -> Settings:
     auth_default = runtime_mode == "production"
     collectors_default = runtime_mode == "production"
     secure_cookie_default = runtime_mode == "production"
+    public_demo_default = runtime_mode != "production"
 
     return Settings(
         runtime_mode=runtime_mode,
@@ -122,4 +129,10 @@ def load_settings() -> Settings:
         predictive_alert_threshold=_env_float("AEGIS_PREDICTIVE_ALERT_THRESHOLD", 0.68),
         predictive_auto_action_threshold=_env_float("AEGIS_PREDICTIVE_AUTO_ACTION_THRESHOLD", 0.88),
         predictive_action_cooldown_s=_env_float("AEGIS_PREDICTIVE_ACTION_COOLDOWN_S", 300.0),
+        public_demo_enabled=_env_bool("AEGIS_PUBLIC_DEMO_ENABLED", public_demo_default),
+        public_demo_services=_env_csv("AEGIS_PUBLIC_DEMO_SERVICES", "recommendationservice"),
+        public_demo_cooldown_s=_env_float("AEGIS_PUBLIC_DEMO_COOLDOWN_S", 180.0),
+        public_demo_rate_limit=_env_int("AEGIS_PUBLIC_DEMO_RATE_LIMIT", 3),
+        public_demo_window_s=_env_float("AEGIS_PUBLIC_DEMO_WINDOW_S", 900.0),
+        public_site_origin=os.getenv("AEGIS_PUBLIC_SITE_ORIGIN", "").strip(),
     )

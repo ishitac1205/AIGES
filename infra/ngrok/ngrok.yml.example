@@ -4,6 +4,9 @@ agent:
   authtoken: YOUR_NGROK_AUTHTOKEN
 
 endpoints:
-  aegis-dashboard:
+  aegis-backend:
     proto: http
-    addr: 8088
+    addr: 8001
+  boutique-storefront:
+    proto: http
+    addr: 8080

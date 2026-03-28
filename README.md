@@ -15,7 +15,7 @@ AEGIS is an observability and automated remediation platform built around the Go
 - [Dashboard Surfaces](#dashboard-surfaces)
 - [Quick Start on Localhost](#quick-start-on-localhost)
 - [Deployment Modes](#deployment-modes)
-- [Public Hosting From This Machine](#public-hosting-from-this-machine)
+- [Hybrid Vercel and Host Deployment](#hybrid-vercel-and-host-deployment)
 - [Configuration](#configuration)
 - [Authentication and Access](#authentication-and-access)
 - [API Endpoints](#api-endpoints)
@@ -273,21 +273,29 @@ bash infra/k8s/deploy-kind.sh
 
 Additional deployment detail is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## Public Hosting From This Machine
+## Hybrid Vercel and Host Deployment
 
-The supported public path is:
+The supported public deployment keeps the control plane on your machine and publishes only the dashboard through Vercel.
 
-1. run the base stack locally with Docker
-2. run the packaged AEGIS backend and dashboard
-3. expose the dashboard over HTTPS with ngrok
-4. keep the backend private behind the dashboard reverse proxy
+Architecture:
+
+1. your PC runs the boutique stack, observability stack, AEGIS backend, models, and SQLite stores
+2. ngrok exposes the backend on `https://...ngrok.app`
+3. Vercel hosts the React dashboard from `dashboard/`
+4. the public dashboard calls the backend directly through `VITE_API_BASE_URL`
 
 Quick path:
 
 ```bash
 docker compose up -d
-docker compose --env-file .env.public -f docker-compose.platform.yml up -d --build
-ngrok http 8088
+docker compose --env-file .env.public -f docker-compose.platform.yml up -d --build aegis-backend
+ngrok http 8001
+```
+
+Then deploy `dashboard/` to Vercel with:
+
+```text
+VITE_API_BASE_URL=https://your-stable-backend.ngrok.app
 ```
 
 Full instructions are in [docs/PUBLIC_HOSTING.md](docs/PUBLIC_HOSTING.md).
@@ -308,6 +316,7 @@ Key variables:
 - `AEGIS_K8S_NAMESPACE`
 - `AEGIS_MODEL_DIR`
 - `AEGIS_SYSTEM_DB`
+- `AEGIS_DOCKER_NETWORK`
 - `AEGIS_PROMETHEUS_URL`
 - `AEGIS_LOKI_URL`
 - `AEGIS_PROMTAIL_URL`
@@ -318,18 +327,27 @@ Key variables:
 - `AEGIS_REMEDIATION_LOCK_TIMEOUT_S`
 - `AEGIS_INCIDENT_MEMORY_LIMIT`
 - `AEGIS_INCIDENT_MEMORY_RETENTION_DAYS`
+- `AEGIS_PUBLIC_DEMO_ENABLED`
+- `AEGIS_PUBLIC_DEMO_SERVICES`
+- `AEGIS_PUBLIC_DEMO_COOLDOWN_S`
+- `AEGIS_PUBLIC_DEMO_RATE_LIMIT`
+- `AEGIS_PUBLIC_DEMO_WINDOW_S`
+- `AEGIS_PUBLIC_SITE_ORIGIN`
+- `VITE_API_BASE_URL`
 - `AEGIS_PREDICTIVE_ALERT_THRESHOLD`
 - `AEGIS_PREDICTIVE_AUTO_ACTION_THRESHOLD`
 - `AEGIS_PREDICTIVE_ACTION_COOLDOWN_S`
 
 ## Authentication and Access
 
-Current runtime access is intentionally simple:
+Current access model:
 
-- the working prototype is open by default
-- operator endpoints can be protected with `AEGIS_API_TOKEN`
-- the packaged dashboard proxies API traffic through `/api`
-- browser Google sign-in code exists in the repository but is currently disabled in the live runtime
+- localhost development can run with `AEGIS_AUTH_ENABLED=false`
+- hosted mode should run with `AEGIS_AUTH_ENABLED=true` and a strong `AEGIS_API_TOKEN`
+- read-only monitoring endpoints remain public
+- manual remediation and incident acknowledgement remain operator-only
+- the public demo uses a separate bounded route controlled by the `AEGIS_PUBLIC_DEMO_*` settings
+- browser Google sign-in code remains in the repo but is paused in the live runtime
 
 ## API Endpoints
 
@@ -342,6 +360,10 @@ Primary endpoints:
 - `GET /ml/insights`
 - `GET /events`
 - `GET /logs`
+- `GET /demo/latest`
+- `GET /demo/policy`
+- `POST /demo/public-run`
+- `POST /demo/run`
 - `GET /logs/report`
 - `GET /history`
 - `GET /window/{service}`

@@ -45,6 +45,28 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(settings.session_cookie_secure)
             self.assertEqual(settings.operator_emails, ["owner@example.com", "ops@example.com"])
 
+    def test_public_demo_settings_are_loaded(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AEGIS_RUNTIME_MODE": "production",
+                "AEGIS_PUBLIC_DEMO_ENABLED": "true",
+                "AEGIS_PUBLIC_DEMO_SERVICES": "recommendationservice,checkoutservice",
+                "AEGIS_PUBLIC_DEMO_COOLDOWN_S": "240",
+                "AEGIS_PUBLIC_DEMO_RATE_LIMIT": "5",
+                "AEGIS_PUBLIC_DEMO_WINDOW_S": "1200",
+                "AEGIS_PUBLIC_SITE_ORIGIN": "https://aegis.example.com",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+            self.assertTrue(settings.public_demo_enabled)
+            self.assertEqual(settings.public_demo_services, ["recommendationservice", "checkoutservice"])
+            self.assertEqual(settings.public_demo_cooldown_s, 240.0)
+            self.assertEqual(settings.public_demo_rate_limit, 5)
+            self.assertEqual(settings.public_demo_window_s, 1200.0)
+            self.assertEqual(settings.public_site_origin, "https://aegis.example.com")
+
 
 if __name__ == "__main__":
     unittest.main()

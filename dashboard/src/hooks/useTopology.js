@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { OPERATOR_HEADERS, apiFetch, apiJson } from '../api'
+import { HAS_OPERATOR_TOKEN, OPERATOR_HEADERS, apiFetch, apiJson } from '../api'
 const POLL_MS = 2000
 const REQUEST_TIMEOUT_MS = 8000
 const OFFLINE_GRACE_MS = 20000
@@ -85,10 +85,11 @@ export function useTopology() {
   }, [])
 
   const triggerDemo = useCallback(async (service = 'recommendationservice', owner = 'operator') => {
-    const res = await apiFetch('/demo/run', {
+    const demoPath = HAS_OPERATOR_TOKEN ? '/demo/run' : '/demo/public-run'
+    const res = await apiFetch(demoPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...OPERATOR_HEADERS },
-      body: JSON.stringify({ service, owner }),
+      body: JSON.stringify({ service, owner: HAS_OPERATOR_TOKEN ? owner : 'public-viewer' }),
     })
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}))
