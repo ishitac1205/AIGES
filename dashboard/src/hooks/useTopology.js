@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { OPERATOR_HEADERS, apiFetch, apiJson } from '../api'
 const POLL_MS = 2000
+const REQUEST_TIMEOUT_MS = 8000
+const OFFLINE_GRACE_MS = 20000
+const FAILURE_THRESHOLD = 3
 
 export function useTopology() {
   const [data, setData] = useState(null)
@@ -8,6 +11,8 @@ export function useTopology() {
   const [error, setError] = useState(null)
   const abortRef = useRef(null)
   const inFlightRef = useRef(false)
+  const failureCountRef = useRef(0)
+  const lastSuccessRef = useRef(0)
 
   const fetchTopology = useCallback(async () => {
     if (inFlightRef.current) return
@@ -15,7 +20,7 @@ export function useTopology() {
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    const timer = setTimeout(() => ctrl.abort(), 4000)
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
     try {
       const json = await apiJson('/topology', { signal: ctrl.signal })
       clearTimeout(timer)
@@ -23,11 +28,21 @@ export function useTopology() {
         setData(json)
         setConnected(true)
         setError(null)
+        failureCountRef.current = 0
+        lastSuccessRef.current = Date.now()
       }
     } catch (e) {
       clearTimeout(timer)
       if (!ctrl.signal.aborted) {
-        setConnected(false)
+        failureCountRef.current += 1
+        const staleForMs = Date.now() - lastSuccessRef.current
+        const shouldMarkOffline =
+          !lastSuccessRef.current ||
+          failureCountRef.current >= FAILURE_THRESHOLD ||
+          staleForMs >= OFFLINE_GRACE_MS
+        if (shouldMarkOffline) {
+          setConnected(false)
+        }
         setError(e.name === 'AbortError' ? 'API timeout' : e.message)
       }
     } finally {
