@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import logging
+import textwrap
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -512,13 +513,12 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
     platform = orchestrator.platform
 
     try:
-        baseline = _current_service_snapshot(service)
         state.system_store.update_demo_run(
             run_id,
             stage="priming",
             status="running",
             summary_text=f"Preparing controlled failure sequence for {service} on {platform}.",
-            summary_json={"baseline": baseline, "stage_history": [{"stage": "priming", "at": utc_now_iso()}]},
+            summary_json={"stage_history": [{"stage": "priming", "at": utc_now_iso()}]},
         )
         logger.info(
             "Autonomous demo started for %s on %s",
@@ -534,8 +534,24 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             message="AEGIS is intentionally disrupting a service to prove detection and recovery.",
             service=service,
             status="open",
-            payload={"run_id": run_id, "owner": owner, "platform": platform, "baseline": baseline},
+            payload={"run_id": run_id, "owner": owner, "platform": platform},
         )
+        readiness = await _await_demo_model_readiness(service, timeout_s=60.0, poll_s=2.0)
+        baseline = _current_service_snapshot(service)
+        if not readiness.get("ready"):
+            emit_system_event(
+                event_type="demo_model_warmup_pending",
+                category="demo",
+                severity="warning",
+                title=f"Model warm-up remained partial on {service}",
+                message=(
+                    "The demo waited for the LSTM sequence window to warm, but the target service was still not fully ready. "
+                    "AEGIS will continue with the best live telemetry available."
+                ),
+                service=service,
+                status="open",
+                payload={"run_id": run_id, "snapshot": readiness.get("snapshot") or baseline},
+            )
         emit_system_event(
             event_type="demo_pressure_building",
             category="demo",
@@ -549,16 +565,89 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status="open",
             payload={"run_id": run_id, "baseline": baseline},
         )
+        pressure_result = await _start_demo_pressure(service, duration_s=32)
+        emit_system_event(
+            event_type="demo_pressure_injected",
+            category="demo",
+            severity="info" if pressure_result.get("started") else "warning",
+            title=f"Live pressure injected on {service}",
+            message=(
+                "AEGIS started a bounded in-service pressure burst so the live models can surface a warning before failure."
+                if pressure_result.get("started")
+                else "Pressure injection was unavailable; the demo will continue without a predictive ramp."
+            ),
+            service=service,
+            status="open",
+            payload={"run_id": run_id, "pressure": pressure_result},
+        )
         await asyncio.sleep(2.5)
 
         state.system_store.update_demo_run(
             run_id,
             stage="pressure_building",
             status="running",
-            summary_text=f"Baseline captured for {service}; failure injection is about to start.",
-            summary_json={"baseline": baseline, "stage_history": [{"stage": "priming", "at": utc_now_iso()}, {"stage": "pressure_building", "at": utc_now_iso()}]},
+            summary_text=f"Baseline captured for {service}; bounded live pressure is now building toward a model-detected warning.",
+            summary_json={
+                "baseline": baseline,
+                "pressure": pressure_result,
+                "stage_history": [{"stage": "priming", "at": utc_now_iso()}, {"stage": "pressure_building", "at": utc_now_iso()}],
+            },
         )
-        await asyncio.sleep(2.5)
+        predictive_signal = await _await_predictive_demo_signal(service, timeout_s=36.0, poll_s=1.5)
+        if predictive_signal.get("alerted"):
+            alert = predictive_signal.get("alert") or {}
+            snapshot = predictive_signal.get("snapshot") or {}
+            emit_system_event(
+                event_type="demo_predictive_warning",
+                category="demo",
+                severity="warning",
+                title=f"Predictive warning surfaced on {service}",
+                message=(
+                    f"The LSTM raised a {alert.get('failure_type', 'pre-failure').replace('_', ' ')} warning "
+                    f"at {round(float(alert.get('lstm_score', 0.0)) * 100)}% risk before the hard failure step."
+                ),
+                service=service,
+                status="open",
+                payload={"run_id": run_id, "alert": alert, "snapshot": snapshot},
+            )
+            state.system_store.update_demo_run(
+                run_id,
+                summary_text=(
+                    f"Pressure on {service} triggered a live predictive warning; "
+                    "AEGIS is now escalating to the hard failure stage."
+                ),
+            )
+        else:
+            snapshot = predictive_signal.get("snapshot") or {}
+            emit_system_event(
+                event_type="demo_predictive_warning_missed",
+                category="demo",
+                severity="warning",
+                title=f"No predictive warning surfaced on {service}",
+                message=(
+                    "The bounded pressure burst did not reach the alert threshold before the hard failure stage. "
+                    "AEGIS will continue so the runtime remediation path can still be proven."
+                ),
+                service=service,
+                status="open",
+                payload={"run_id": run_id, "snapshot": snapshot, "pressure": pressure_result},
+            )
+
+        pressure_restore = _restore_demo_pressure(service, pressure_result)
+        emit_system_event(
+            event_type="demo_pressure_restored",
+            category="demo",
+            severity="info" if pressure_restore.get("restored") else "warning",
+            title=f"Pressure controls restored on {service}",
+            message=(
+                "AEGIS restored the temporary demo resource limits before injecting the hard failure."
+                if pressure_restore.get("restored")
+                else "AEGIS could not fully restore the temporary demo resource limits before the hard failure stage."
+            ),
+            service=service,
+            status="open",
+            payload={"run_id": run_id, "restore": pressure_restore},
+        )
 
         state.system_store.update_demo_run(run_id, stage="attacking", status="running")
         ok, message, details = orchestrator.stop_service(service)
@@ -863,6 +952,180 @@ def _timeline_snapshot(limit: int = 10) -> List[Dict[str, Any]]:
     if state.system_store is None:
         return []
     return state.system_store.list_events(limit=limit)
+
+
+def _docker_demo_pressure_script(duration_s: int) -> str:
+    return textwrap.dedent(
+        f"""
+        import multiprocessing as mp
+        import time
+
+        def burn():
+            end = time.time() + {int(duration_s)}
+            buf = []
+            marker = 0
+            log_target = None
+            try:
+                log_target = open("/proc/1/fd/1", "a", buffering=1)
+            except Exception:
+                log_target = None
+            while time.time() < end:
+                buf.append(bytearray(2 * 1024 * 1024))
+                if len(buf) > 140:
+                    buf = buf[-80:]
+                value = 0
+                for i in range(1200000):
+                    value = (value + i) % 1000003
+                if log_target and marker % 2 == 0:
+                    log_target.write(
+                        "AEGIS demo Exception: recommendationservice timeout spike detected during predictive pressure ramp\\n"
+                    )
+                    log_target.flush()
+                marker += 1
+                time.sleep(0.08)
+
+        workers = [mp.Process(target=burn) for _ in range(3)]
+        [worker.start() for worker in workers]
+        [worker.join() for worker in workers]
+        """
+    ).strip()
+
+
+async def _start_demo_pressure(service: str, duration_s: int = 32) -> Dict[str, Any]:
+    orchestrator = state.remediation_engine.orchestrator if state.remediation_engine else None
+    if orchestrator is None:
+        return {"started": False, "reason": "orchestrator_unavailable"}
+
+    if orchestrator.platform != "docker":
+        return {"started": False, "reason": f"pressure_injection_not_supported_for_{orchestrator.platform}"}
+
+    find_container = getattr(orchestrator, "_find_container", None)
+    if find_container is None:
+        return {"started": False, "reason": "container_lookup_unavailable"}
+
+    try:
+        container = find_container(service, all_containers=False)
+        if container is None:
+            return {"started": False, "reason": "container_not_found"}
+        container.reload()
+        host_config = (container.attrs or {}).get("HostConfig", {})
+        current_stats = container.stats(stream=False)
+        memory_usage = int(((current_stats or {}).get("memory_stats") or {}).get("usage") or 0)
+        original_memory = int(host_config.get("Memory") or 0)
+        original_memory_swap = int(host_config.get("MemorySwap") or 0)
+        original_cpu_period = int(host_config.get("CpuPeriod") or 0)
+        original_cpu_quota = int(host_config.get("CpuQuota") or 0)
+
+        update_kwargs: Dict[str, Any] = {}
+        target_memory = max(int(memory_usage * 2.0), 96 * 1024 * 1024)
+        if original_memory > 0:
+            tightened_memory = max(int(original_memory * 0.4), int(memory_usage * 1.5), 96 * 1024 * 1024)
+            target_memory = min(original_memory, tightened_memory)
+        if target_memory > 0 and (original_memory == 0 or target_memory < original_memory):
+            update_kwargs["mem_limit"] = target_memory
+            update_kwargs["memswap_limit"] = target_memory
+
+        target_cpu_period = 100_000
+        target_cpu_quota = 30_000
+        if original_cpu_quota == 0 or target_cpu_quota < original_cpu_quota:
+            update_kwargs["cpu_period"] = target_cpu_period
+            update_kwargs["cpu_quota"] = target_cpu_quota
+
+        if update_kwargs:
+            container.update(**update_kwargs)
+        script = _docker_demo_pressure_script(duration_s)
+        container.exec_run(["python", "-c", script], detach=True)
+        return {
+            "started": True,
+            "platform": orchestrator.platform,
+            "service": service,
+            "duration_s": duration_s,
+            "container_name": container.name,
+            "resource_pressure": {
+                "applied": update_kwargs,
+                "restore": {
+                    "memory": original_memory if original_memory > 0 else 4 * 1024 * 1024 * 1024,
+                    "memory_swap": original_memory_swap if original_memory_swap > 0 else 4 * 1024 * 1024 * 1024,
+                    "cpu_period": original_cpu_period if original_cpu_period > 0 else 100_000,
+                    "cpu_quota": original_cpu_quota if original_cpu_quota > 0 else 200_000,
+                },
+            },
+        }
+    except Exception as exc:
+        logger.warning("Failed to inject demo pressure for %s: %s", service, exc)
+        return {"started": False, "reason": str(exc)}
+
+
+def _restore_demo_pressure(service: str, pressure_result: Dict[str, Any]) -> Dict[str, Any]:
+    orchestrator = state.remediation_engine.orchestrator if state.remediation_engine else None
+    if orchestrator is None or orchestrator.platform != "docker":
+        return {"restored": False, "reason": "orchestrator_unavailable"}
+
+    restore = ((pressure_result or {}).get("resource_pressure") or {}).get("restore") or {}
+    if not restore:
+        return {"restored": False, "reason": "no_restore_state"}
+
+    find_container = getattr(orchestrator, "_find_container", None)
+    if find_container is None:
+        return {"restored": False, "reason": "container_lookup_unavailable"}
+
+    try:
+        container = find_container(service, all_containers=False)
+        if container is None:
+            return {"restored": False, "reason": "container_not_found"}
+        update_kwargs: Dict[str, Any] = {}
+        if int(restore.get("memory") or 0) > 0:
+            update_kwargs["mem_limit"] = int(restore["memory"])
+        if int(restore.get("memory_swap") or 0) > 0:
+            update_kwargs["memswap_limit"] = int(restore["memory_swap"])
+        if int(restore.get("cpu_period") or 0) > 0:
+            update_kwargs["cpu_period"] = int(restore["cpu_period"])
+        if int(restore.get("cpu_quota") or 0) > 0:
+            update_kwargs["cpu_quota"] = int(restore["cpu_quota"])
+        if update_kwargs:
+            container.update(**update_kwargs)
+        return {"restored": True, "details": update_kwargs}
+    except Exception as exc:
+        logger.warning("Failed to restore demo pressure for %s: %s", service, exc)
+        return {"restored": False, "reason": str(exc)}
+
+
+async def _await_predictive_demo_signal(service: str, timeout_s: float = 24.0, poll_s: float = 1.5) -> Dict[str, Any]:
+    deadline = time.time() + timeout_s
+    strongest_snapshot: Dict[str, Any] = {}
+    strongest_score = 0.0
+
+    while time.time() < deadline:
+        snapshot = (state.current_scores or {}).get(service, {}) if state.current_scores else {}
+        alert = state.predictive_alerts.get(service)
+        lstm_score = float(snapshot.get("lstm_score", 0.0) or 0.0)
+        if lstm_score >= strongest_score:
+            strongest_score = lstm_score
+            strongest_snapshot = snapshot
+        if alert and alert.get("status") in {"active", "mitigating"}:
+            return {
+                "alerted": True,
+                "alert": alert,
+                "snapshot": snapshot,
+            }
+        await asyncio.sleep(poll_s)
+
+    return {
+        "alerted": False,
+        "alert": None,
+        "snapshot": strongest_snapshot,
+    }
+
+
+async def _await_demo_model_readiness(service: str, timeout_s: float = 60.0, poll_s: float = 2.0) -> Dict[str, Any]:
+    deadline = time.time() + timeout_s
+    latest_snapshot: Dict[str, Any] = {}
+    while time.time() < deadline:
+        latest_snapshot = (state.current_scores or {}).get(service, {}) if state.current_scores else {}
+        if latest_snapshot.get("model_state") == "ready" and latest_snapshot.get("lstm_score") is not None:
+            return {"ready": True, "snapshot": latest_snapshot}
+        await asyncio.sleep(poll_s)
+    return {"ready": False, "snapshot": latest_snapshot}
 
 
 def _has_usable_telemetry(features: Dict[str, Any], sequence_rows: List[Dict[str, Any]]) -> bool:
