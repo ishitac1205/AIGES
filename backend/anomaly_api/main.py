@@ -49,6 +49,7 @@ from anomaly_api.model_features import (
     SEQUENCE_FEATURES,
     build_if_feature_vector,
     build_sequence_rows,
+    normalize_sequence_array,
     rows_to_sequence_array,
     top_if_contributors,
     top_sequence_features,
@@ -969,8 +970,11 @@ def compute_all_scores() -> Dict[str, Dict]:
         ordered_if_values = [if_vector[name] for name in IF_FEATURES]
         if_score = state.if_inference.score_vector(ordered_if_values)
         lstm_score = None
+        lstm_details: Dict[str, Any] = {}
         if sequence_array.shape[0] >= LSTM_SEQUENCE_WINDOW:
-            lstm_score = state.lstm_inference.predict(sequence_array[-LSTM_SEQUENCE_WINDOW:])
+            normalized_sequence = normalize_sequence_array(sequence_array[-LSTM_SEQUENCE_WINDOW:])
+            lstm_details = state.lstm_inference.predict_details(normalized_sequence)
+            lstm_score = float(lstm_details["failure_probability"])
         combined = if_score if lstm_score is None else (0.45 * if_score + 0.55 * lstm_score)
         snapshot = {
             "if_score": round(if_score, 3),
@@ -984,6 +988,10 @@ def compute_all_scores() -> Dict[str, Dict]:
             "log_count": features.get("log_count_mean", 0),
             "model_state": "ready" if lstm_score is not None else "if_only",
             "sequence_fill": round(min(sequence_array.shape[0] / LSTM_SEQUENCE_WINDOW, 1.0), 3),
+            "predicted_service": lstm_details.get("predicted_service"),
+            "predicted_service_probability": round(float(lstm_details["predicted_service_probability"]), 4)
+            if lstm_details.get("predicted_service_probability") is not None
+            else None,
         }
         state.current_model_insights[svc] = {
             "service": svc,
@@ -997,6 +1005,18 @@ def compute_all_scores() -> Dict[str, Dict]:
             "combined_score": round(float(combined), 4),
             "if_features": if_vector,
             "latest_sequence_row": sequence_rows[-1],
+            "normalized_sequence_row": normalized_sequence[-1].round(4).tolist() if lstm_details else None,
+            "predicted_service": lstm_details.get("predicted_service"),
+            "predicted_service_probability": round(float(lstm_details["predicted_service_probability"]), 4)
+            if lstm_details.get("predicted_service_probability") is not None
+            else None,
+            "service_probabilities": [
+                {
+                    "service": item.get("service"),
+                    "probability": round(float(item.get("probability", 0.0)), 4),
+                }
+                for item in lstm_details.get("service_probabilities", [])
+            ],
             "if_contributors": top_if_contributors(
                 if_vector,
                 state.if_inference.scaler_mean,
@@ -2409,6 +2429,10 @@ async def ml_insights():
                 "if_contributors": insight.get("if_contributors", []),
                 "sequence_highlights": insight.get("sequence_highlights", []),
                 "latest_sequence_row": insight.get("latest_sequence_row", {}),
+                "normalized_sequence_row": insight.get("normalized_sequence_row"),
+                "predicted_service": insight.get("predicted_service"),
+                "predicted_service_probability": insight.get("predicted_service_probability"),
+                "service_probabilities": insight.get("service_probabilities", []),
                 "predictive_alert": predictive_alert,
                 "score_history": score_history[svc],
             }

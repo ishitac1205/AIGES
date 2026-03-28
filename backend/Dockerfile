@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --extra-index-url ${PIP_EXTRA_INDEX_URL} -r /app/
 COPY backend /app/backend
 COPY ml /app/ml
 COPY models /app/models
+COPY new_models /app/new_models
 
 ENV PYTHONPATH=/app:/app/backend \
     AEGIS_API_HOST=0.0.0.0 \

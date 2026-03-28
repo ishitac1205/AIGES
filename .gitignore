@@ -54,6 +54,7 @@ pipeline/data/training/*.csv
 # Runtime logs and PIDs
 pipeline/logs/*.log
 pipeline/logs/*.pid
+backend/.runtime/
 backend/.runtime/*.db
 backend/backend/.runtime/*.db
 
@@ -82,3 +83,4 @@ dashboard/frontend/dist/
 
 # macOS
 .DS_Store
+new_models/.DS_Store

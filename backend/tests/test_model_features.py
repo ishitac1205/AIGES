@@ -16,6 +16,7 @@ from anomaly_api.model_features import (
     SEQUENCE_FEATURES,
     build_if_feature_vector,
     build_sequence_rows,
+    normalize_sequence_array,
     rows_to_sequence_array,
 )
 
@@ -58,11 +59,15 @@ class ModelFeatureTests(unittest.TestCase):
 
         rows = build_sequence_rows(window)
         sequence = rows_to_sequence_array(rows)
+        normalized = normalize_sequence_array(sequence)
         if_vector = build_if_feature_vector(sequence)
 
         self.assertEqual(len(rows), LSTM_SEQUENCE_WINDOW)
         self.assertEqual(sequence.shape, (LSTM_SEQUENCE_WINDOW, len(SEQUENCE_FEATURES)))
+        self.assertEqual(normalized.shape, (LSTM_SEQUENCE_WINDOW, len(SEQUENCE_FEATURES)))
         self.assertEqual(len(if_vector), len(IF_FEATURES))
+        self.assertEqual(len(SEQUENCE_FEATURES), 18)
+        self.assertEqual(len(IF_FEATURES), 90)
 
 
 if __name__ == "__main__":

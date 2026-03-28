@@ -12,8 +12,15 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _default_model_dir() -> str:
+    preferred = REPO_ROOT / "new_models" / "aegis_models"
+    if preferred.exists():
+        return "new_models/aegis_models"
+    return "models/aegis_models"
+
+
 def _model_dir() -> Path:
-    configured = os.getenv("AEGIS_MODEL_DIR", "models/aegis_models")
+    configured = os.getenv("AEGIS_MODEL_DIR", _default_model_dir())
     path = Path(configured)
     return path if path.is_absolute() else REPO_ROOT / path
 

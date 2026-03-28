@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
 
@@ -35,6 +36,14 @@ def _env_float(name: str, default: float) -> float:
 def _env_csv(name: str, default: str) -> List[str]:
     raw = os.getenv(name, default)
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _default_model_dir() -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    preferred = repo_root / "new_models" / "aegis_models"
+    if preferred.exists():
+        return "new_models/aegis_models"
+    return "models/aegis_models"
 
 
 @dataclass(frozen=True)
@@ -124,7 +133,7 @@ def load_settings() -> Settings:
         remediation_cooldown_s=_env_float("AEGIS_REMEDIATION_COOLDOWN_S", 30.0),
         remediation_lock_timeout_s=_env_float("AEGIS_REMEDIATION_LOCK_TIMEOUT_S", 300.0),
         infrastructure_collectors_enabled=_env_bool("AEGIS_INFRA_COLLECTORS_ENABLED", collectors_default),
-        model_dir=os.getenv("AEGIS_MODEL_DIR", "models/aegis_models"),
+        model_dir=os.getenv("AEGIS_MODEL_DIR", _default_model_dir()),
         system_db_path=os.getenv("AEGIS_SYSTEM_DB", "backend/.runtime/aegis_system.db"),
         predictive_alert_threshold=_env_float("AEGIS_PREDICTIVE_ALERT_THRESHOLD", 0.68),
         predictive_auto_action_threshold=_env_float("AEGIS_PREDICTIVE_AUTO_ACTION_THRESHOLD", 0.88),

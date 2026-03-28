@@ -23,7 +23,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             settings = load_settings()
             self.assertEqual(settings.runtime_mode, "dev")
-            self.assertEqual(settings.model_dir, "models/aegis_models")
+            self.assertEqual(settings.model_dir, "new_models/aegis_models")
             self.assertEqual(settings.system_db_path, "backend/.runtime/aegis_system.db")
             self.assertGreater(settings.predictive_alert_threshold, 0.0)
             self.assertGreater(settings.predictive_auto_action_threshold, settings.predictive_alert_threshold)

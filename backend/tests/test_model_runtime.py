@@ -27,12 +27,14 @@ class ModelRuntimeTests(unittest.TestCase):
         x3 = np.zeros((lstm_model.window_size, lstm_model.n_features), dtype=np.float32)
 
         if_score = if_model.score_vector(x2.tolist())
-        lstm_score = lstm_model.predict(x3)
+        details = lstm_model.predict_details(x3)
+        lstm_score = float(details["failure_probability"])
 
         self.assertGreaterEqual(if_score, 0.0)
         self.assertLessEqual(if_score, 1.0)
         self.assertGreaterEqual(lstm_score, 0.0)
         self.assertLessEqual(lstm_score, 1.0)
+        self.assertEqual(lstm_model.n_features, 18)
 
 
 if __name__ == "__main__":
