@@ -82,6 +82,7 @@ RUNTIME_FAILURE_TRIGGER_COUNT = 2
 RUNTIME_RESTART_LOOP_THRESHOLD = 3
 RUNTIME_STARTUP_GRACE_POLLS = 10
 RUNTIME_AUTOMATION_WARMUP_S = 60
+SERVICE_CLASS_CONFIDENCE_THRESHOLD = 0.8
 
 REVERSE_DEPENDENCY_GRAPH: Dict[str, List[str]] = {}
 for _service_name, _dependencies in DEPENDENCY_GRAPH.items():
@@ -844,7 +845,6 @@ def _predictive_auto_action_allowed(snapshot: Dict[str, Any], failure_type: str,
     if failure_type == "generic_anomaly":
         return False
 
-    combined_score = float(snapshot.get("combined_score", 0.0) or 0.0)
     feature_flags = set(snapshot.get("feature_flags", []) or [])
     corroborating_flags = {
         "memory_pressure",
@@ -856,7 +856,7 @@ def _predictive_auto_action_allowed(snapshot: Dict[str, Any], failure_type: str,
         "exceptions_detected",
         "error_rate_high",
     }
-    return combined_score >= SETTINGS.predictive_alert_threshold and bool(feature_flags.intersection(corroborating_flags))
+    return bool(feature_flags.intersection(corroborating_flags))
 
 
 def _timeline_snapshot(limit: int = 10) -> List[Dict[str, Any]]:
@@ -975,6 +975,13 @@ def compute_all_scores() -> Dict[str, Dict]:
             normalized_sequence = normalize_sequence_array(sequence_array[-LSTM_SEQUENCE_WINDOW:])
             lstm_details = state.lstm_inference.predict_details(normalized_sequence)
             lstm_score = float(lstm_details["failure_probability"])
+        predicted_service = lstm_details.get("predicted_service")
+        predicted_service_probability = lstm_details.get("predicted_service_probability")
+        service_class_reliable = (
+            predicted_service is not None
+            and predicted_service_probability is not None
+            and float(predicted_service_probability) >= SERVICE_CLASS_CONFIDENCE_THRESHOLD
+        )
         combined = if_score if lstm_score is None else (0.45 * if_score + 0.55 * lstm_score)
         snapshot = {
             "if_score": round(if_score, 3),
@@ -988,10 +995,11 @@ def compute_all_scores() -> Dict[str, Dict]:
             "log_count": features.get("log_count_mean", 0),
             "model_state": "ready" if lstm_score is not None else "if_only",
             "sequence_fill": round(min(sequence_array.shape[0] / LSTM_SEQUENCE_WINDOW, 1.0), 3),
-            "predicted_service": lstm_details.get("predicted_service"),
-            "predicted_service_probability": round(float(lstm_details["predicted_service_probability"]), 4)
-            if lstm_details.get("predicted_service_probability") is not None
+            "predicted_service": predicted_service if service_class_reliable else None,
+            "predicted_service_probability": round(float(predicted_service_probability), 4)
+            if service_class_reliable and predicted_service_probability is not None
             else None,
+            "service_class_reliable": service_class_reliable,
         }
         state.current_model_insights[svc] = {
             "service": svc,
@@ -1006,9 +1014,17 @@ def compute_all_scores() -> Dict[str, Dict]:
             "if_features": if_vector,
             "latest_sequence_row": sequence_rows[-1],
             "normalized_sequence_row": normalized_sequence[-1].round(4).tolist() if lstm_details else None,
-            "predicted_service": lstm_details.get("predicted_service"),
-            "predicted_service_probability": round(float(lstm_details["predicted_service_probability"]), 4)
-            if lstm_details.get("predicted_service_probability") is not None
+            "predicted_service": predicted_service if service_class_reliable else None,
+            "predicted_service_probability": round(float(predicted_service_probability), 4)
+            if service_class_reliable and predicted_service_probability is not None
+            else None,
+            "service_class_reliable": service_class_reliable,
+            "service_class_hint": {
+                "service": predicted_service,
+                "probability": round(float(predicted_service_probability), 4) if predicted_service_probability is not None else None,
+                "reliable": service_class_reliable,
+            }
+            if predicted_service is not None and predicted_service_probability is not None
             else None,
             "service_probabilities": [
                 {
@@ -2432,6 +2448,8 @@ async def ml_insights():
                 "normalized_sequence_row": insight.get("normalized_sequence_row"),
                 "predicted_service": insight.get("predicted_service"),
                 "predicted_service_probability": insight.get("predicted_service_probability"),
+                "service_class_reliable": insight.get("service_class_reliable", False),
+                "service_class_hint": insight.get("service_class_hint"),
                 "service_probabilities": insight.get("service_probabilities", []),
                 "predictive_alert": predictive_alert,
                 "score_history": score_history[svc],
