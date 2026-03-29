@@ -130,7 +130,7 @@ def load_settings() -> Settings:
         incident_memory_db=os.getenv("INCIDENT_MEMORY_DB", "backend/.runtime/incident_memory.db"),
         incident_memory_limit=_env_int("AEGIS_INCIDENT_MEMORY_LIMIT", 5000),
         incident_memory_retention_days=_env_int("AEGIS_INCIDENT_MEMORY_RETENTION_DAYS", 30),
-        remediation_cooldown_s=_env_float("AEGIS_REMEDIATION_COOLDOWN_S", 30.0),
+        remediation_cooldown_s=_env_float("AEGIS_REMEDIATION_COOLDOWN_S", 10.0),
         remediation_lock_timeout_s=_env_float("AEGIS_REMEDIATION_LOCK_TIMEOUT_S", 300.0),
         infrastructure_collectors_enabled=_env_bool("AEGIS_INFRA_COLLECTORS_ENABLED", collectors_default),
         model_dir=os.getenv("AEGIS_MODEL_DIR", _default_model_dir()),

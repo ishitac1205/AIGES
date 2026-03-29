@@ -23,9 +23,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 WINDOW_SIZE = 20          # observations per service
-DOCKER_POLL_INTERVAL = 5.0   # seconds
-LOKI_POLL_INTERVAL = 10.0    # seconds
-TRACE_POLL_INTERVAL = 15.0   # seconds
+DOCKER_POLL_INTERVAL = 2.0   # seconds — fast enough for <15s detection
+LOKI_POLL_INTERVAL = 5.0     # seconds
+TRACE_POLL_INTERVAL = 10.0   # seconds
 LOKI_URL = os.getenv("AEGIS_LOKI_URL", "http://localhost:3100")
 JAEGER_URL = os.getenv("AEGIS_JAEGER_URL", "http://localhost:16686")
 PROMETHEUS_URL = os.getenv("AEGIS_PROMETHEUS_URL", "http://localhost:9090")
