@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from anomaly_api.narrator import build_narrative
 from remediation.action_executor import ActionExecutor
 from remediation.containment import ContainmentController
 from remediation.evaluator import PostActionEvaluator
@@ -167,6 +168,7 @@ class RemediationEngine:
             break
 
         elapsed = round(time.time() - start, 3)
+        incident.elapsed_s = elapsed  # expose to narrator
         incident.operator_summary = self._build_operator_summary(incident, runtime_state)
         self._persist_memory(incident)
         self.incident_history.appendleft(incident)
@@ -428,13 +430,30 @@ class RemediationEngine:
         return " ".join(part for part in parts if part).strip()
 
     def _build_operator_summary(self, incident: Incident, runtime_state) -> str:
-        decision = incident.decision.action if incident.decision else "unknown"
+        action  = incident.decision.action if incident.decision else "unknown"
         verdict = incident.evaluation.verdict if incident.evaluation else "unknown"
-        return (
-            f"Incident {incident.id} on {incident.root_cause_service} "
-            f"({incident.failure_type}) used {decision} on {self.orchestrator.platform}; "
-            f"workload status was {runtime_state.status}; final outcome: {incident.status}/{verdict}."
+        outcome = incident.status if incident.status in {"resolved", "contained", "manual_required"} else verdict
+
+        evidence    = incident.evidence or {}
+        before_snap = evidence.get("service_snapshot") or {}
+        after_snap  = (incident.evaluation.after_snapshot if incident.evaluation else None) or {}
+        flags       = evidence.get("feature_flags") or []
+        affected    = list(incident.affected_services or [])
+        elapsed_s   = getattr(incident, "elapsed_s", None)
+
+        narrative = build_narrative(
+            service=incident.root_cause_service,
+            failure_type=incident.failure_type or "generic_anomaly",
+            feature_flags=flags,
+            action=action,
+            outcome=outcome,
+            before_snapshot=before_snap,
+            after_snapshot=after_snap,
+            affected_services=affected,
+            remediation_s=elapsed_s,
+            platform=self.orchestrator.platform,
         )
+        return narrative["plain_summary"]
 
 
 if __name__ == "__main__":

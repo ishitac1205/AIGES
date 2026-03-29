@@ -42,6 +42,7 @@ for _p in [_backend, _repo_root]:
         sys.path.insert(0, _p)
 
 from anomaly_api.correlation import CorrelationEngine
+from anomaly_api.narrator import build_demo_narrative, build_narrative
 from anomaly_api.google_identity import verify_google_credential
 from anomaly_api.infrastructure import build_infrastructure_payload
 from anomaly_api.model_features import (
@@ -374,20 +375,42 @@ def _build_demo_report(run_id: int, service: str, started_at: str, remediation_r
     event_titles = [item.get("title") for item in events[:6] if item.get("title")]
     noteworthy_logs = [item.get("message") for item in error_logs[:3]] or [item.get("message") for item in warning_logs[:3]]
 
-    summary_text = (
-        f"AEGIS demo attacked {service} on {platform}, observed the outage, "
-        f"applied {decision_payload.get('action', 'a recovery action')}, "
-        f"and ended with the workload {'healthy' if final_ok else 'still degraded'}."
+    action      = decision_payload.get("action", "start_service")
+    outcome     = "resolved" if final_ok else "degraded"
+    elapsed_s   = remediation_result.get("elapsed_s")
+    before_snap = (remediation_result.get("evaluation") or {}).get("before_snapshot") or {}
+    after_snap  = (remediation_result.get("evaluation") or {}).get("after_snapshot") or {}
+
+    summary_text = build_demo_narrative(
+        service=service,
+        action=action,
+        outcome=outcome,
+        elapsed_s=elapsed_s,
+        before_snapshot=before_snap,
+        after_snapshot=after_snap,
     )
+    narrative = build_narrative(
+        service=service,
+        failure_type="service_unhealthy",
+        feature_flags=[],
+        action=action,
+        outcome=outcome,
+        before_snapshot=before_snap,
+        after_snapshot=after_snap,
+        remediation_s=elapsed_s,
+        platform=platform,
+    )
+
     summary_json = {
         "run_id": run_id,
         "service": service,
         "platform": platform,
         "status": "resolved" if final_ok else "degraded",
         "incident_id": remediation_result.get("incident_id"),
-        "decision_action": decision_payload.get("action"),
+        "decision_action": action,
         "within_target": remediation_result.get("within_target"),
-        "elapsed_s": remediation_result.get("elapsed_s"),
+        "elapsed_s": elapsed_s,
+        "narrative": narrative,
         "event_count": len(events),
         "log_count": len(logs),
         "error_log_count": len(error_logs),
@@ -405,14 +428,24 @@ def _build_demo_report(run_id: int, service: str, started_at: str, remediation_r
         f"Platform: {platform}",
         f"Generated at: {utc_now_iso()}",
         "",
-        "## Summary",
+        "## What Happened",
         "",
-        summary_text,
+        narrative["what_happened"],
+        "",
+        "## What AEGIS Did",
+        "",
+        narrative["what_was_done"],
+        "",
+        "## Outcome",
+        "",
+        narrative["outcome_text"],
+        "",
+        "## Details",
         "",
         f"- Incident ID: {remediation_result.get('incident_id') or 'n/a'}",
-        f"- Recovery action: {decision_payload.get('action', 'n/a')}",
-        f"- Within target: {remediation_result.get('within_target')}",
-        f"- Elapsed seconds: {remediation_result.get('elapsed_s')}",
+        f"- Recovery action: {action}",
+        f"- Within 15s target: {remediation_result.get('within_target')}",
+        f"- Elapsed seconds: {elapsed_s}",
         f"- Events recorded: {len(events)}",
         f"- Logs recorded: {len(logs)}",
         "",

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
+import concurrent.futures as _cf
 
 from remediation.models import WorkloadState
 
@@ -164,6 +165,18 @@ class DockerOrchestratorAdapter(OrchestratorAdapter):
     def inspect_service(self, service_name: str) -> WorkloadState:
         return self._inspect_container(service_name)
 
+    def _call_with_timeout(self, fn, timeout_s: float, timeout_message: str) -> None:
+        executor = _cf.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(fn)
+            try:
+                future.result(timeout=timeout_s)
+            except _cf.TimeoutError:
+                future.cancel()
+                raise RuntimeError(timeout_message)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     def _run_action(self, service_name: str, action: str) -> Tuple[bool, str, Dict]:
         container = self._find_container(service_name, all_containers=True)
         if container is None:
@@ -171,11 +184,31 @@ class DockerOrchestratorAdapter(OrchestratorAdapter):
 
         try:
             if action == "restart":
-                container.restart(timeout=30)
+                self._call_with_timeout(
+                    lambda: container.restart(timeout=30),
+                    timeout_s=10.0,
+                    timeout_message="container.restart() timed out after 10s; Docker daemon may be overloaded",
+                )
             elif action == "stop":
-                container.stop(timeout=20)
+                try:
+                    self._call_with_timeout(
+                        lambda: container.stop(timeout=20),
+                        timeout_s=10.0,
+                        timeout_message="container.stop() timed out after 10s; Docker daemon may be overloaded",
+                    )
+                except RuntimeError:
+                    logger.warning("Graceful stop timed out for %s; escalating to container.kill()", service_name)
+                    self._call_with_timeout(
+                        container.kill,
+                        timeout_s=5.0,
+                        timeout_message="container.kill() timed out after 5s; Docker daemon may be overloaded",
+                    )
             elif action == "start":
-                container.start()
+                self._call_with_timeout(
+                    container.start,
+                    timeout_s=8.0,
+                    timeout_message="container.start() timed out after 8s; Docker daemon may be overloaded",
+                )
             else:
                 return False, f"Unsupported docker action: {action}", {}
 
