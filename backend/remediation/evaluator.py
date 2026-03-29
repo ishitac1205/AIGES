@@ -21,6 +21,9 @@ class PostActionEvaluator:
         wait_s = max(0.0, float(decision.evaluation_window_s))
         if decision.action in {"start_service", "restart_service", "restart_dependency_chain"} and self.orchestrator.platform == "kubernetes":
             wait_s = max(wait_s, 10.0)
+        # On Docker the container reflects running state within ~1s; no need to wait the full window.
+        elif self.orchestrator.platform == "docker":
+            wait_s = min(wait_s, 1.0)
 
         service = incident.root_cause_service
         before_snapshot = before_scores.get(service, {})
