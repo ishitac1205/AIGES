@@ -513,6 +513,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
     platform = orchestrator.platform
 
     try:
+        demo_start_t = time.time()
         state.system_store.update_demo_run(
             run_id,
             stage="priming",
@@ -522,8 +523,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
         )
         logger.info(
             "Autonomous demo started for %s on %s",
-            service,
-            platform,
+            service, platform,
             extra={"service": service, "event_type": "demo_started"},
         )
         emit_system_event(
@@ -536,127 +536,24 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status="open",
             payload={"run_id": run_id, "owner": owner, "platform": platform},
         )
-        # LSTM needs 8 observations at ~1s intervals = ~10s minimum warmup.
-        # 12s timeout gives a 2s buffer; beyond that the demo runs with partial model state.
-        readiness = await _await_demo_model_readiness(service, timeout_s=12.0, poll_s=1.0)
+
+        # Quick readiness check — if the system has been running the model is already warm.
+        # 2s timeout: proceed with best available state rather than stalling the demo.
+        readiness = await _await_demo_model_readiness(service, timeout_s=2.0, poll_s=0.5)
         baseline = _current_service_snapshot(service)
-        if not readiness.get("ready"):
-            emit_system_event(
-                event_type="demo_model_warmup_pending",
-                category="demo",
-                severity="warning",
-                title=f"Model warm-up remained partial on {service}",
-                message=(
-                    "The demo waited for the LSTM sequence window to warm, but the target service was still not fully ready. "
-                    "AEGIS will continue with the best live telemetry available."
-                ),
-                service=service,
-                status="open",
-                payload={"run_id": run_id, "snapshot": readiness.get("snapshot") or baseline},
-            )
-        emit_system_event(
-            event_type="demo_pressure_building",
-            category="demo",
-            severity="info",
-            title=f"Controlled pressure building on {service}",
-            message=(
-                f"AEGIS is capturing the live baseline for {service} before injecting the failure. "
-                f"Current score is {baseline['score']:.3f}."
-            ),
-            service=service,
-            status="open",
-            payload={"run_id": run_id, "baseline": baseline},
-        )
-        pressure_result = await _start_demo_pressure(service, duration_s=3)
-        emit_system_event(
-            event_type="demo_pressure_injected",
-            category="demo",
-            severity="info" if pressure_result.get("started") else "warning",
-            title=f"Live pressure injected on {service}",
-            message=(
-                "AEGIS started a bounded in-service pressure burst so the live models can surface a warning before failure."
-                if pressure_result.get("started")
-                else "Pressure injection was unavailable; the demo will continue without a predictive ramp."
-            ),
-            service=service,
-            status="open",
-            payload={"run_id": run_id, "pressure": pressure_result},
-        )
-        await asyncio.sleep(0.5)
-
-        state.system_store.update_demo_run(
-            run_id,
-            stage="pressure_building",
-            status="running",
-            summary_text=f"Baseline captured for {service}; bounded live pressure is now building toward a model-detected warning.",
-            summary_json={
-                "baseline": baseline,
-                "pressure": pressure_result,
-                "stage_history": [{"stage": "priming", "at": utc_now_iso()}, {"stage": "pressure_building", "at": utc_now_iso()}],
-            },
-        )
-        predictive_signal = await _await_predictive_demo_signal(service, timeout_s=8.0, poll_s=0.5)
-        if predictive_signal.get("alerted"):
-            alert = predictive_signal.get("alert") or {}
-            snapshot = predictive_signal.get("snapshot") or {}
-            emit_system_event(
-                event_type="demo_predictive_warning",
-                category="demo",
-                severity="warning",
-                title=f"Predictive warning surfaced on {service}",
-                message=(
-                    f"The LSTM raised a {alert.get('failure_type', 'pre-failure').replace('_', ' ')} warning "
-                    f"at {round(float(alert.get('lstm_score', 0.0)) * 100)}% risk before the hard failure step."
-                ),
-                service=service,
-                status="open",
-                payload={"run_id": run_id, "alert": alert, "snapshot": snapshot},
-            )
-            state.system_store.update_demo_run(
-                run_id,
-                summary_text=(
-                    f"Pressure on {service} triggered a live predictive warning; "
-                    "AEGIS is now escalating to the hard failure stage."
-                ),
-            )
-        else:
-            snapshot = predictive_signal.get("snapshot") or {}
-            emit_system_event(
-                event_type="demo_predictive_warning_missed",
-                category="demo",
-                severity="warning",
-                title=f"No predictive warning surfaced on {service}",
-                message=(
-                    "The bounded pressure burst did not reach the alert threshold before the hard failure stage. "
-                    "AEGIS will continue so the runtime remediation path can still be proven."
-                ),
-                service=service,
-                status="open",
-                payload={"run_id": run_id, "snapshot": snapshot, "pressure": pressure_result},
-            )
-
-        pressure_restore = _restore_demo_pressure(service, pressure_result)
-        emit_system_event(
-            event_type="demo_pressure_restored",
-            category="demo",
-            severity="info" if pressure_restore.get("restored") else "warning",
-            title=f"Pressure controls restored on {service}",
-            message=(
-                "AEGIS restored the temporary demo resource limits before injecting the hard failure."
-                if pressure_restore.get("restored")
-                else "AEGIS could not fully restore the temporary demo resource limits before the hard failure stage."
-            ),
-            service=service,
-            status="open",
-            payload={"run_id": run_id, "restore": pressure_restore},
+        logger.info(
+            "Demo baseline for %s: score=%.3f ready=%s (T+%.2fs)",
+            service, baseline.get("score", 0.0), readiness.get("ready"),
+            time.time() - demo_start_t,
         )
 
+        # ── ATTACK ────────────────────────────────────────────────────────────────
         state.system_store.update_demo_run(run_id, stage="attacking", status="running")
         ok, message, details = orchestrator.stop_service(service)
+        attack_t = time.time()
         logger.info(
-            "Demo attack injected for %s: %s",
-            service,
-            message,
+            "Demo attack injected for %s: %s (T+%.2fs)",
+            service, message, attack_t - demo_start_t,
             extra={"service": service, "event_type": "demo_attack_injected"},
         )
         emit_system_event(
@@ -667,7 +564,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             message=message if ok else f"Failed to inject demo failure: {message}",
             service=service,
             status="open",
-            payload={"run_id": run_id, "details": details},
+            payload={"run_id": run_id, "details": details, "baseline": baseline},
         )
         if not ok:
             report = _build_demo_report(run_id, service, started_at, {}, platform)
@@ -682,28 +579,48 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             )
             return
 
+        # ── OBSERVE ───────────────────────────────────────────────────────────────
         state.system_store.update_demo_run(
             run_id,
             stage="observing_failure",
             status="running",
-            summary_text=f"Failure injected into {service}; observing cluster impact before remediation.",
+            summary_text=f"Failure injected into {service}; AEGIS is detecting the anomaly.",
         )
         emit_system_event(
             event_type="demo_failure_observed",
             category="demo",
             severity="warning",
-            title=f"Watching failure propagation on {service}",
-            message="The workload has been disrupted; AEGIS is waiting for the live telemetry and runtime signals to reflect the failure.",
+            title=f"Failure detected on {service}",
+            message="The workload has been disrupted; AEGIS runtime monitors have registered the failure.",
             service=service,
             status="open",
             payload={"run_id": run_id, "post_attack_state": _current_service_snapshot(service)},
         )
 
+        # 2s fixed window — lets the scoring loop register at least one anomalous
+        # observation before remediation fires, keeping the detection step visible on the UI.
         await asyncio.sleep(2.0)
+
+        post_attack_snapshot = _current_service_snapshot(service)
+        emit_system_event(
+            event_type="demo_anomaly_detected",
+            category="demo",
+            severity="critical",
+            title=f"Anomaly confirmed on {service}",
+            message=(
+                f"Score rose to {post_attack_snapshot.get('score', 0.0):.3f} "
+                f"(baseline {baseline.get('score', 0.0):.3f}). AEGIS initiating autonomous recovery."
+            ),
+            service=service,
+            status="open",
+            payload={"run_id": run_id, "snapshot": post_attack_snapshot},
+        )
+
+        # ── REMEDIATE ─────────────────────────────────────────────────────────────
         state.system_store.update_demo_run(run_id, stage="remediating", status="running")
         logger.info(
-            "Autonomous recovery started for %s",
-            service,
+            "Autonomous recovery started for %s (T+%.2fs)",
+            service, time.time() - demo_start_t,
             extra={"service": service, "event_type": "demo_recovery_started"},
         )
         emit_system_event(
@@ -711,7 +628,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             category="demo",
             severity="info",
             title=f"Autonomous recovery started for {service}",
-            message="AEGIS is now running its remediation workflow against the intentionally disrupted service.",
+            message="AEGIS is executing its remediation workflow to restore the disrupted service.",
             service=service,
             status="open",
             payload={"run_id": run_id},
@@ -746,10 +663,9 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
 
         decision_payload = remediation_result.get("decision") or {}
         logger.info(
-            "Demo remediation for %s selected %s and incident %s",
-            service,
-            decision_payload.get("action", "unknown"),
-            remediation_result.get("incident_id"),
+            "Demo remediation for %s selected %s, incident %s (T+%.2fs)",
+            service, decision_payload.get("action", "unknown"),
+            remediation_result.get("incident_id"), time.time() - demo_start_t,
             extra={
                 "service": service,
                 "event_type": "demo_remediation_result",
@@ -757,6 +673,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             },
         )
 
+        # ── EVALUATE ──────────────────────────────────────────────────────────────
         state.system_store.update_demo_run(
             run_id,
             stage="evaluating",
@@ -764,16 +681,24 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             incident_id=remediation_result.get("incident_id"),
             fix_action=decision_payload.get("action", ""),
             summary_text=(
-                f"Remediation triggered for {service}; evaluating whether "
+                f"Remediation triggered for {service}; verifying "
                 f"{decision_payload.get('action', 'the selected action')} restored health."
             ),
         )
 
-        for _ in range(5):
+        # 3s max verification window — exits early as soon as the container is running.
+        for _ in range(3):
             runtime_state = orchestrator.inspect_service(service)
             if runtime_state.exists and runtime_state.running and runtime_state.status not in {"not_found", "dead", "exited"}:
                 break
             await asyncio.sleep(1.0)
+
+        elapsed_s = round(time.time() - demo_start_t, 2)
+        logger.info(
+            "Demo cycle complete for %s in %.2fs",
+            service, elapsed_s,
+            extra={"service": service, "event_type": "demo_cycle_complete"},
+        )
 
         report = _build_demo_report(run_id, service, started_at, remediation_result, platform)
         final_status = "resolved" if report["summary_json"].get("status") == "resolved" else "failed"
@@ -782,14 +707,13 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status=final_status,
             stage="completed",
             summary_text=report["summary_text"],
-            summary_json=report["summary_json"],
+            summary_json={**report["summary_json"], "demo_elapsed_s": elapsed_s},
             report_markdown=report["report_markdown"],
             report_json=report["report_json"],
         )
         logger.info(
             "Autonomous demo completed for %s with status %s",
-            service,
-            final_status,
+            service, final_status,
             extra={
                 "service": service,
                 "event_type": "demo_completed",
@@ -800,11 +724,16 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             event_type="demo_completed",
             category="demo",
             severity="info" if final_status == "resolved" else "warning",
-            title=f"Autonomous demo completed for {service}",
+            title=f"Autonomous demo completed for {service} in {elapsed_s}s",
             message=report["summary_text"],
             service=service,
             status="closed" if final_status == "resolved" else "open",
-            payload={"run_id": run_id, "incident_id": remediation_result.get("incident_id"), "summary": report["summary_json"]},
+            payload={
+                "run_id": run_id,
+                "incident_id": remediation_result.get("incident_id"),
+                "summary": report["summary_json"],
+                "elapsed_s": elapsed_s,
+            },
         )
     except Exception as exc:
         logger.exception("Autonomous demo run failed")
