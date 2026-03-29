@@ -8,7 +8,7 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }) {
-  const [dark, setDark] = useState(false)
+  const [dark, setDark] = useState(true)
   return (
     <ThemeCtx.Provider value={{ theme: dark ? darkTheme : lightTheme, dark, setDark }}>
       {children}

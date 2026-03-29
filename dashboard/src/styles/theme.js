@@ -46,17 +46,17 @@ export const darkTheme = {
 export const theme = lightTheme
 
 export const ORBIT_CONFIGS = {
-  'redis-cart':            { ring: 1, angle: 8 },
-  'productcatalogservice': { ring: 2, angle: 0 },
-  'paymentservice':        { ring: 2, angle: 60 },
-  'shippingservice':       { ring: 2, angle: 120 },
-  'emailservice':          { ring: 2, angle: 180 },
-  'currencyservice':       { ring: 2, angle: 240 },
-  'adservice':             { ring: 2, angle: 300 },
-  'cartservice':           { ring: 3, angle: 250 },
-  'recommendationservice': { ring: 3, angle: 80 },
-  'checkoutservice':       { ring: 4, angle: 320 },
-  'frontend':              { ring: 5, angle: 45 },
+  'redis-cart':            { ring: 1, angle: 20 },
+  'productcatalogservice': { ring: 2, angle: 40 },
+  'paymentservice':        { ring: 2, angle: 160 },
+  'shippingservice':       { ring: 2, angle: 280 },
+  'emailservice':          { ring: 3, angle: 0 },
+  'currencyservice':       { ring: 3, angle: 90 },
+  'adservice':             { ring: 3, angle: 180 },
+  'cartservice':           { ring: 3, angle: 270 },
+  'recommendationservice': { ring: 4, angle: 110 },
+  'checkoutservice':       { ring: 4, angle: 330 },
+  'frontend':              { ring: 5, angle: 200 },
 }
 
 export const RING_RADII = [0, 92, 195, 300, 390, 480]
