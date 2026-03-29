@@ -15,7 +15,7 @@ import logging
 import threading
 import os
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 import numpy as np
 import requests
@@ -134,7 +134,15 @@ class DockerStatsCollector:
     def _fetch_container_stats(self, container, svc: str, elapsed: float) -> Optional[Dict]:
         """Fetch stats for a single container and return parsed metrics."""
         try:
-            raw = container.stats(stream=False)
+            # 1.5s hard cap: a hung Docker stats call must not stall the entire poll cycle
+            import concurrent.futures as _cf
+            with _cf.ThreadPoolExecutor(max_workers=1) as _tex:
+                _f = _tex.submit(container.stats, stream=False)
+                try:
+                    raw = _f.result(timeout=1.5)
+                except _cf.TimeoutError:
+                    logger.debug("DockerStatsCollector: stats timeout for %s, skipping", svc)
+                    return None
 
             # CPU %
             cpu_delta = (
@@ -237,8 +245,11 @@ class DockerStatsCollector:
                     executor.submit(self._fetch_container_stats, container, svc, elapsed): svc
                     for container, svc in container_svc_pairs
                 }
-                for future in as_completed(futures):
-                    result = future.result()
+                for future in as_completed(futures, timeout=2.0):
+                    try:
+                        result = future.result(timeout=0.1)
+                    except (FuturesTimeoutError, Exception):
+                        continue
                     if result is not None:
                         svc = result["svc"]
                         new_cumulative[svc] = result.pop("_new_cum")

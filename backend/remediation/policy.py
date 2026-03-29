@@ -49,48 +49,57 @@ class ActionPolicy:
 
 
 DEFAULT_POLICIES: Dict[str, ActionPolicy] = {
+    # retry_budget=1 across all policies: one attempt + one retry keeps worst-case
+    # remediation execution under 10s even if the first action is slow.
+    # backoff_s=0.5 (was 1.0-1.5): tight backoff — Docker ops are fast on local infra.
     "service_unhealthy": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "start_service", "isolate_service", "escalate_incident"],
-        retry_budget=2,
+        retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "memory_leak": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "isolate_service", "escalate_incident"],
-        retry_budget=2,
+        retry_budget=1,
         evaluation_window_s=2.0,
-        backoff_s=1.5,
+        backoff_s=0.75,
     ),
     "cpu_starvation": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "isolate_service", "escalate_incident"],
         retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "network_latency": ActionPolicy(
         default_action="restart_dependency_chain",
         allowed_actions=["restart_dependency_chain", "restart_service", "reroute_service", "isolate_service", "escalate_incident"],
         retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "dependency_failure": ActionPolicy(
         default_action="restart_dependency_chain",
         allowed_actions=["restart_dependency_chain", "restart_service", "isolate_service", "escalate_incident"],
         retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "log_exception_storm": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "isolate_service", "escalate_incident"],
         retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "generic_anomaly": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "isolate_service", "escalate_incident"],
         retry_budget=1,
         evaluation_window_s=2.0,
+        backoff_s=0.5,
     ),
     "none": ActionPolicy(
         default_action="noop",

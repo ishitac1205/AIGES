@@ -135,7 +135,7 @@ class RemediationEngine:
 
             if final_containment.next_action == "retry":
                 incident.retry_count += 1
-                sleep_s = min(2.5, decision.backoff_s + random.uniform(0.0, 0.5))
+                sleep_s = min(1.0, decision.backoff_s + random.uniform(0.0, 0.25))
                 time.sleep(sleep_s)
                 continue
 

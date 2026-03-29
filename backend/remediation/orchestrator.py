@@ -175,7 +175,14 @@ class DockerOrchestratorAdapter(OrchestratorAdapter):
             elif action == "stop":
                 container.stop(timeout=20)
             elif action == "start":
-                container.start()
+                # container.start() has no built-in timeout; cap at 8s to prevent indefinite hang
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=1) as _tex:
+                    _f = _tex.submit(container.start)
+                    try:
+                        _f.result(timeout=8)
+                    except _cf.TimeoutError:
+                        raise RuntimeError("container.start() timed out after 8s — Docker daemon may be overloaded")
             else:
                 return False, f"Unsupported docker action: {action}", {}
 

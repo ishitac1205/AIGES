@@ -536,7 +536,9 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status="open",
             payload={"run_id": run_id, "owner": owner, "platform": platform},
         )
-        readiness = await _await_demo_model_readiness(service, timeout_s=60.0, poll_s=2.0)
+        # LSTM needs 8 observations at ~1s intervals = ~10s minimum warmup.
+        # 12s timeout gives a 2s buffer; beyond that the demo runs with partial model state.
+        readiness = await _await_demo_model_readiness(service, timeout_s=12.0, poll_s=1.0)
         baseline = _current_service_snapshot(service)
         if not readiness.get("ready"):
             emit_system_event(
