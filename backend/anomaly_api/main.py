@@ -79,10 +79,10 @@ ALL_SERVICES = [
     "adservice",
     "redis-cart",
 ]
-RUNTIME_FAILURE_TRIGGER_COUNT = 2
+RUNTIME_FAILURE_TRIGGER_COUNT = 1   # fire on first bad poll for sub-15s response
 RUNTIME_RESTART_LOOP_THRESHOLD = 3
 RUNTIME_STARTUP_GRACE_POLLS = 10
-RUNTIME_AUTOMATION_WARMUP_S = 60
+RUNTIME_AUTOMATION_WARMUP_S = 15    # reduced from 60s so automation arms quickly
 SERVICE_CLASS_CONFIDENCE_THRESHOLD = 0.8
 
 REVERSE_DEPENDENCY_GRAPH: Dict[str, List[str]] = {}
@@ -565,7 +565,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status="open",
             payload={"run_id": run_id, "baseline": baseline},
         )
-        pressure_result = await _start_demo_pressure(service, duration_s=32)
+        pressure_result = await _start_demo_pressure(service, duration_s=3)
         emit_system_event(
             event_type="demo_pressure_injected",
             category="demo",
@@ -580,7 +580,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             status="open",
             payload={"run_id": run_id, "pressure": pressure_result},
         )
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(0.5)
 
         state.system_store.update_demo_run(
             run_id,
@@ -593,7 +593,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
                 "stage_history": [{"stage": "priming", "at": utc_now_iso()}, {"stage": "pressure_building", "at": utc_now_iso()}],
             },
         )
-        predictive_signal = await _await_predictive_demo_signal(service, timeout_s=36.0, poll_s=1.5)
+        predictive_signal = await _await_predictive_demo_signal(service, timeout_s=8.0, poll_s=0.5)
         if predictive_signal.get("alerted"):
             alert = predictive_signal.get("alert") or {}
             snapshot = predictive_signal.get("snapshot") or {}
@@ -697,7 +697,7 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             payload={"run_id": run_id, "post_attack_state": _current_service_snapshot(service)},
         )
 
-        await asyncio.sleep(6.0)
+        await asyncio.sleep(2.0)
         state.system_store.update_demo_run(run_id, stage="remediating", status="running")
         logger.info(
             "Autonomous recovery started for %s",
@@ -767,11 +767,11 @@ async def run_autonomous_demo(run_id: int, service: str, owner: str) -> None:
             ),
         )
 
-        for _ in range(8):
+        for _ in range(5):
             runtime_state = orchestrator.inspect_service(service)
             if runtime_state.exists and runtime_state.running and runtime_state.status not in {"not_found", "dead", "exited"}:
                 break
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(1.0)
 
         report = _build_demo_report(run_id, service, started_at, remediation_result, platform)
         final_status = "resolved" if report["summary_json"].get("status") == "resolved" else "failed"
