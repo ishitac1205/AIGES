@@ -1,6 +1,7 @@
 import React from 'react'
 import { ORBIT_CONFIGS } from '../styles/theme'
 import { useTheme } from '../ThemeContext'
+import SolarSystem2D from './SolarSystem2D'
 import PlanetScene from './PlanetScene'
 
 const RING_LEGEND = [
@@ -12,6 +13,7 @@ const RING_LEGEND = [
 
 export default function SolarSystem({ topology, selectedService, onSelectService }) {
   const { theme } = useTheme()
+  const isDark = theme.bg === '#0d1117' || theme.bg === '#000000'
 
   const services = topology?.services || {}
   const selData = services[selectedService]
@@ -27,7 +29,7 @@ export default function SolarSystem({ topology, selectedService, onSelectService
   })
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: theme.bg }}>
       {/* Live / offline indicator */}
       <div style={{
         position: 'absolute', top: 8, left: 12, zIndex: 10,
@@ -64,11 +66,19 @@ export default function SolarSystem({ topology, selectedService, onSelectService
         ))}
       </div>
 
-      <PlanetScene
-        topology={topology}
-        selectedService={selectedService}
-        onSelectService={onSelectService}
-      />
+      {isDark ? (
+        <PlanetScene
+          topology={topology}
+          selectedService={selectedService}
+          onSelectService={onSelectService}
+        />
+      ) : (
+        <SolarSystem2D
+          topology={topology}
+          selectedService={selectedService}
+          onSelectService={onSelectService}
+        />
+      )}
     </div>
   )
 }
