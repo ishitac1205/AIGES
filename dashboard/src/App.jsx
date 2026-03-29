@@ -9,6 +9,7 @@ import { HAS_OPERATOR_TOKEN } from './api'
 import { ThemeProvider, useTheme } from './ThemeContext'
 import SolarSystem from './components/SolarSystem'
 import InfoPanel from './components/InfoPanel'
+import DemoBanner from './components/DemoBanner'
 import ServiceDetail from './components/ServiceDetail'
 import InfraPage from './components/InfraPage'
 import ModelsPage from './components/ModelsPage'
@@ -99,6 +100,7 @@ function DashboardApp({ auth, onLogout }) {
   const [windowLoading, setWindowLoading] = useState(false)
   const [page, setPage] = useState(getPageFromLocation)
   const [demoBusy, setDemoBusy] = useState(false)
+  const [demoError, setDemoError] = useState(null)
   const windowAbortRef = useRef(null)
 
   useEffect(() => {
@@ -149,24 +151,21 @@ function DashboardApp({ auth, onLogout }) {
   const publicDemo = data?.public_demo || auth?.config?.public_demo || null
   const publicDemoCoolingDown = Number(publicDemo?.cooldown_remaining_s || 0) > 0
   const canOperate = Boolean(auth?.user?.operator) || HAS_OPERATOR_TOKEN || !auth?.config?.operator_token_required
-  const canTriggerDemo = canOperate || (Boolean(publicDemo?.enabled) && !publicDemoCoolingDown)
+  const canTriggerDemo = !auth?.config?.operator_token_required || canOperate || (Boolean(publicDemo?.enabled) && !publicDemoCoolingDown)
   const DOT_GRID = `radial-gradient(circle, ${theme.bgDot} 1px, transparent 1px)`
 
   const handleDemoRun = useCallback(async () => {
     setDemoBusy(true)
+    setDemoError(null)
     try {
       await triggerDemo('recommendationservice', auth?.user?.email || auth?.user?.name || 'operator')
       refreshTopology()
-      refreshInfrastructure()
-      refreshInsights()
-      systemLogs.refreshLogs()
-      setPage('logs')
-    } catch (demoError) {
-      console.error('Demo run failed to start:', demoError)
+    } catch (err) {
+      setDemoError(err?.message || 'Demo failed to start')
     } finally {
       setDemoBusy(false)
     }
-  }, [auth, refreshInfrastructure, refreshInsights, refreshTopology, systemLogs, triggerDemo])
+  }, [auth, refreshTopology, triggerDemo])
 
   const navBtn = (key, label, hint) => ({
     type: 'button',
@@ -308,12 +307,15 @@ function DashboardApp({ auth, onLogout }) {
 
       {page === 'solar' ? (
         <PageBoundary resetKey={`solar-${data?.timestamp || 'none'}`} theme={theme} label="Solar System">
-          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
             <div style={{ flex: 1, position: 'relative', borderRight: `2px solid ${theme.border}`, overflow: 'hidden' }}>
+              {(demoRunning || latestDemo?.status === 'running') && (
+                <DemoBanner demoRun={latestDemo} theme={theme} />
+              )}
               <SolarSystem topology={data} selectedService={selectedService} onSelectService={handleSelectService} />
             </div>
             <div style={{ width: 300, flexShrink: 0, background: theme.bg, overflowY: 'auto' }}>
-              <InfoPanel topology={data}>
+              <InfoPanel topology={data} demoError={demoError}>
                 {selectedService && selectedData && (
                   <ServiceDetail service={selectedService} data={selectedData} windowData={windowLoading ? null : windowData} onRemediate={canOperate ? triggerRemediation : null} onClose={() => { setSelectedService(null); setWindowData(null) }} />
                 )}

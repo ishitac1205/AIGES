@@ -148,7 +148,7 @@ function TimelineItem({ event, theme, styles }) {
   )
 }
 
-export default function InfoPanel({ topology, children }) {
+export default function InfoPanel({ topology, children, demoError }) {
   const { theme } = useTheme()
   const styles = panelStyles(theme)
   const health = topology?.health_score ?? '—'
@@ -293,10 +293,20 @@ export default function InfoPanel({ topology, children }) {
             <div style={{ ...styles.badge, color: demoRun.download_ready ? theme.accent : theme.textMuted }}>
               {demoRun.download_ready ? 'Report ready in system logs' : 'Report will appear after recovery closes'}
             </div>
+            {demoRun.status === 'running' && (
+              <div style={{ marginTop: 6, fontSize: 10, color: theme.accent, fontWeight: 600 }}>
+                ● {describeDemoStage(demoRun.stage)} — watching live…
+              </div>
+            )}
           </>
         ) : (
           <div style={styles.meta}>
             No demo run has been launched yet. Use the top-bar demo button to trigger an intentional outage and watch the autonomous recovery path.
+          </div>
+        )}
+        {demoError && (
+          <div style={{ marginTop: 8, fontSize: 10, color: '#cc2222', fontWeight: 600 }}>
+            {demoError}
           </div>
         )}
       </PanelCard>

@@ -252,7 +252,27 @@ def _record_public_demo_request(request: Request) -> None:
     bucket.append(time.time())
 
 
+def _reconcile_stale_demo() -> None:
+    """If the asyncio task is gone or finished but the DB still shows 'running',
+    mark the record failed so the next start attempt isn't blocked by guard D."""
+    if state.demo_task is None or state.demo_task.done():
+        latest = latest_demo_run()
+        if latest and latest.get("status") == "running" and state.system_store:
+            logger.warning(
+                "Reconciling stale demo run %s — task is done/absent but DB status was 'running'",
+                latest.get("id"),
+            )
+            state.system_store.update_demo_run(
+                latest["id"],
+                status="failed",
+                stage="failed",
+                summary_text="Demo run was interrupted and automatically marked failed on next start.",
+            )
+
+
 def _start_demo_run(service: str, owner: str) -> Dict[str, Any]:
+    _reconcile_stale_demo()
+
     if state.remediation_engine is None or state.system_store is None:
         raise HTTPException(503, "Demo control plane is not available")
     if service not in ALL_SERVICES:
@@ -2615,7 +2635,7 @@ async def _build_topology_payload():
 @app.get("/topology")
 async def topology():
     now = time.time()
-    if state.topology_cache is not None and (now - state.topology_cache_at) < 1.25:
+    if state.topology_cache is not None and (now - state.topology_cache_at) < 0.5:
         return state.topology_cache
     payload = await _build_topology_payload()
     state.topology_cache = payload
