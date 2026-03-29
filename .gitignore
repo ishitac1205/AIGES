@@ -50,6 +50,9 @@ ml/lstm/model/*.h5
 pipeline/data/training/
 pipeline/data/training/*.parquet
 pipeline/data/training/*.csv
+pipeline/data/baselines/
+pipeline/data/baselines/*.parquet
+pipeline/data/baselines/*.csv
 
 # Runtime logs and PIDs
 pipeline/logs/*.log

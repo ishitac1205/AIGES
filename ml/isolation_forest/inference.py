@@ -25,16 +25,24 @@ def _model_dir() -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def _if_model_dir() -> Path:
+    configured = os.getenv("AEGIS_IF_MODEL_DIR", "").strip()
+    if not configured:
+        return _model_dir()
+    path = Path(configured)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 class IFInference:
     def __init__(self) -> None:
         self.model = None
         self.scaler = None
         self.threshold: Optional[float] = None
-        self.feature_count = 66
+        self.feature_count = 90
         self.loaded_from: Optional[str] = None
 
     def load(self) -> bool:
-        model_dir = _model_dir()
+        model_dir = _if_model_dir()
         model_path = model_dir / "if_model.pkl"
         scaler_path = model_dir / "scaler.pkl"
         if not model_path.exists():
