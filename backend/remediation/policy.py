@@ -62,7 +62,7 @@ DEFAULT_POLICIES: Dict[str, ActionPolicy] = {
     "memory_leak": ActionPolicy(
         default_action="restart_service",
         allowed_actions=["restart_service", "isolate_service", "escalate_incident"],
-        retry_budget=1,
+        retry_budget=2,
         evaluation_window_s=2.0,
         backoff_s=0.75,
     ),

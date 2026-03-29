@@ -1595,7 +1595,13 @@ def _runtime_failure_context(service: str, workload: Any, scores: Dict[str, Dict
         "evidence": evidence,
         "reasons": reasons,
         "workload": runtime_snapshot,
-        "trigger_count": RUNTIME_STARTUP_GRACE_POLLS if startup_grace else RUNTIME_FAILURE_TRIGGER_COUNT,
+        "trigger_count": (
+            RUNTIME_STARTUP_GRACE_POLLS
+            if startup_grace
+            else max(RUNTIME_FAILURE_TRIGGER_COUNT, 2)
+            if failure_type == "memory_leak"
+            else RUNTIME_FAILURE_TRIGGER_COUNT
+        ),
         "startup_grace": startup_grace,
     }
 
